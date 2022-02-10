@@ -18,6 +18,21 @@ import {
   VkPhysicalDeviceFeatures,
   vkGetPhysicalDeviceFeatures,
   VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+  vkGetPhysicalDeviceQueueFamilyProperties,
+  VkQueueFamilyProperties,
+  VK_QUEUE_GRAPHICS_BIT,
+  VkDevice,
+  VkDeviceQueueCreateInfo,
+  VkDeviceCreateInfo,
+  vkCreateDevice,
+  vkDestroyDevice,
+  VkQueue,
+  vkGetDeviceQueue,
+  VK_QUEUE_COMPUTE_BIT,
+  VK_QUEUE_TRANSFER_BIT,
+  VK_QUEUE_SPARSE_BINDING_BIT,
+  VkSurfaceKHR,
+  vkDestroySurfaceKHR,
 } from 'nvk'
 
 import { ASSERT_VK_RESULT } from './utils'
@@ -78,7 +93,13 @@ const initVulkan = () => {
       )
     }
 
-    return instance
+    return [
+      instance,
+      allFoundLayers,
+      () => {
+        vkDestroyInstance(instance, null)
+      },
+    ] as const
   }
 
   const pickPhysicalDevice = (instance: VkInstance) => {
@@ -104,31 +125,171 @@ const initVulkan = () => {
       const deviceFeatures = new VkPhysicalDeviceFeatures()
       vkGetPhysicalDeviceFeatures(device, deviceFeatures)
 
-      return (
+      return [
         deviceProperties.deviceType === VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
-        deviceFeatures.geometryShader
-      )
+          deviceFeatures.geometryShader,
+        deviceProperties,
+        deviceFeatures,
+      ] as const
     }
 
     for (const device of physicalDevices) {
-      if (isSuitable(device)) {
+      const [suitable, properties, features] = isSuitable(device)
+      if (suitable) {
         physicalDevice = device
-        break
+        return [
+          physicalDevice as VkPhysicalDevice,
+          properties,
+          features,
+        ] as const
       }
     }
 
     if (physicalDevice === VK_NULL_HANDLE) {
       throw new Error('Unable to find a suitable GPU!')
     }
-
-    return physicalDevice
   }
 
-  const instance = createInstance()
-  const physicalDevice = pickPhysicalDevice(instance)
+  type QueueFamilyIndices = {
+    graphicsFamily: null | number
+    presentFamily: null | number
+  }
+  const findQueueFamilies = (
+    physicalDevice: VkPhysicalDevice,
+  ): QueueFamilyIndices => {
+    const indices: QueueFamilyIndices = {
+      graphicsFamily: null,
+      presentFamily: null,
+    }
+    const queueFamilyCount = { $: 0 }
+    vkGetPhysicalDeviceQueueFamilyProperties(
+      physicalDevice,
+      queueFamilyCount,
+      null,
+    )
+
+    const queueFamilies = new Array(queueFamilyCount.$)
+      .fill(null)
+      .map(() => new VkQueueFamilyProperties())
+    vkGetPhysicalDeviceQueueFamilyProperties(
+      physicalDevice,
+      queueFamilyCount,
+      queueFamilies,
+    )
+
+    queueFamilies.map((queueFamily, index) => {
+      console.log(`Graphics Queue Family ${index}`)
+      console.log(
+        `VK_QUEUE_GRAPHICS_BIT: ${
+          (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) !== 0
+        }`,
+      )
+      console.log(
+        `VK_QUEUE_COMPUTE_BIT: ${
+          (queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT) !== 0
+        }`,
+      )
+      console.log(
+        `VK_QUEUE_TRANSFER_BIT: ${
+          (queueFamily.queueFlags & VK_QUEUE_TRANSFER_BIT) !== 0
+        }`,
+      )
+      console.log(
+        `VK_QUEUE_SPARSE_BINDING_BIT: ${
+          (queueFamily.queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) !== 0
+        }`,
+      )
+      console.log(`Count: ${queueFamily.queueCount}`)
+      console.log(`TS valid bits: ${queueFamily.timestampValidBits}`)
+    })
+
+    for (let i = 0; i < queueFamilies.length; ++i) {
+      const queueFamily = queueFamilies[i]
+      if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+        indices.graphicsFamily = i
+      }
+
+      if (indices.graphicsFamily != null) {
+        break
+      }
+    }
+
+    return indices
+  }
+
+  const createLogicalDevice = (
+    physicalDevice: VkPhysicalDevice,
+    indices: QueueFamilyIndices,
+    features: VkPhysicalDeviceFeatures,
+    enabledLayers: string[],
+  ) => {
+    const queuePriority = new Float32Array([1.0])
+    const queueCreateInfo = new VkDeviceQueueCreateInfo({
+      queueFamilyIndex: indices.graphicsFamily!,
+      queueCount: 1,
+      pQueuePriorities: queuePriority,
+    })
+
+    const deviceCreateInfo = new VkDeviceCreateInfo({
+      pQueueCreateInfos: [queueCreateInfo],
+      queueCreateInfoCount: 1,
+      pEnabledFeatures: features,
+      enabledExtensionCount: 0,
+      enabledLayerCount: enabledLayers.length,
+      ppEnabledLayerNames: enabledLayers,
+    })
+
+    const device = new VkDevice()
+    const result = vkCreateDevice(
+      physicalDevice,
+      deviceCreateInfo,
+      null,
+      device,
+    )
+    ASSERT_VK_RESULT(result, 'Unable to create a logical device!')
+
+    const graphicsQueue = new VkQueue()
+    vkGetDeviceQueue(device, indices.graphicsFamily!, 0, graphicsQueue)
+
+    return [
+      device,
+      graphicsQueue,
+      () => {
+        vkDestroyDevice(device, null)
+      },
+    ] as const
+  }
+
+  const createSurface = (instance: VkInstance) => {
+    const surface = new VkSurfaceKHR()
+    const surfaceResult = win.createSurface(instance, null, surface)
+    ASSERT_VK_RESULT(surfaceResult, 'Unable to create window surface!')
+
+    return [
+      surface,
+      () => {
+        vkDestroySurfaceKHR(instance, surface, null)
+      },
+    ] as const
+  }
+
+  const [instance, enabledLayers, destroyInstance] = createInstance()
+  const [surface, destroySurface] = createSurface(instance)
+  const [physicalDevice, deviceProperties, deviceFeatures] = pickPhysicalDevice(
+    instance,
+  )!
+  const queueFamilies = findQueueFamilies(physicalDevice)
+  const [device, graphicsQueue, destroyDevice] = createLogicalDevice(
+    physicalDevice,
+    queueFamilies,
+    deviceFeatures,
+    enabledLayers,
+  )
 
   const cleanup = () => {
-    vkDestroyInstance(instance, null)
+    destroyDevice()
+    destroySurface()
+    destroyInstance()
   }
 
   return {
