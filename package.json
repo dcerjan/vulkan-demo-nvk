@@ -1,0 +1,17 @@
+{
+  "name": "vulkan-demo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "ts-node ./src/index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "nvk": "^0.8.0",
+    "ts-node": "^10.5.0",
+    "typescript": "^4.5.5"
+  }
+}
