@@ -1,3 +1,5 @@
+import fs from 'fs'
+import path from 'path'
 import {
   VkApplicationInfo,
   vkCreateInstance,
@@ -8,7 +10,6 @@ import {
   VkLayerProperties,
   VkPhysicalDevice,
   vkEnumeratePhysicalDevices,
-  VK_API_VERSION_1_0,
   VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
   VK_MAKE_VERSION,
   VK_NULL_HANDLE,
@@ -44,7 +45,6 @@ import {
   vkGetPhysicalDeviceSurfacePresentModesKHR,
   VK_FORMAT_B8G8R8A8_SRGB,
   VK_COLORSPACE_SRGB_NONLINEAR_KHR,
-  VkPresentInfoKHR,
   VK_PRESENT_MODE_MAILBOX_KHR,
   VK_PRESENT_MODE_FIFO_KHR,
   VkPresentModeKHR,
@@ -59,17 +59,81 @@ import {
   vkDestroySwapchainKHR,
   VkImage,
   vkGetSwapchainImagesKHR,
+  VkImageView,
+  VkImageViewCreateInfo,
+  VK_IMAGE_VIEW_TYPE_2D,
+  VkFormat,
+  VkComponentMapping,
+  VK_COMPONENT_SWIZZLE_IDENTITY,
+  VkImageSubresourceRange,
+  VK_IMAGE_ASPECT_COLOR_BIT,
+  vkCreateImageView,
+  vkDestroyImageView,
+  VkShaderModuleCreateInfo,
+  VkShaderModule,
+  vkCreateShaderModule,
+  vkDestroyShaderModule,
+  VkPipelineShaderStageCreateInfo,
+  VK_SHADER_STAGE_VERTEX_BIT,
+  VK_SHADER_STAGE_FRAGMENT_BIT,
+  VkPipelineVertexInputStateCreateInfo,
+  VkPipelineInputAssemblyStateCreateInfo,
+  VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+  VkViewport,
+  VkRect2D,
+  VkOffset2D,
+  VkPipelineViewportStateCreateInfo,
+  VkPipelineRasterizationStateCreateInfo,
+  VK_POLYGON_MODE_FILL,
+  VK_CULL_MODE_BACK_BIT,
+  VK_FRONT_FACE_CLOCKWISE,
+  VkPipelineMultisampleStateCreateInfo,
+  VK_SAMPLE_COUNT_1_BIT,
+  VkPipelineColorBlendAttachmentState,
+  VK_COLOR_COMPONENT_R_BIT,
+  VK_COLOR_COMPONENT_G_BIT,
+  VK_COLOR_COMPONENT_B_BIT,
+  VK_COLOR_COMPONENT_A_BIT,
+  VK_BLEND_FACTOR_ONE,
+  VK_BLEND_FACTOR_ZERO,
+  VK_BLEND_OP_ADD,
+  VK_BLEND_FACTOR_SRC_ALPHA,
+  VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
+  VkPipelineColorBlendStateCreateInfo,
+  VK_LOGIC_OP_COPY,
+  VK_DYNAMIC_STATE_VIEWPORT,
+  VK_DYNAMIC_STATE_LINE_WIDTH,
+  VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+  VkPipelineDynamicStateCreateInfo,
+  VkPipelineLayout,
+  VkPipelineLayoutCreateInfo,
+  vkCreatePipelineLayout,
+  vkDestroyPipelineLayout,
+  VkAttachmentDescription,
+  VK_ATTACHMENT_LOAD_OP_CLEAR,
+  VK_ATTACHMENT_STORE_OP_STORE,
+  VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+  VK_ATTACHMENT_STORE_OP_DONT_CARE,
+  VK_IMAGE_LAYOUT_UNDEFINED,
+  VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+  VkAttachmentReference,
+  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+  VkSubpassDescription,
+  VK_PIPELINE_BIND_POINT_GRAPHICS,
+  VkRenderPass,
+  VkRenderPassCreateInfo,
+  vkCreateRenderPass,
+  vkDestroyRenderPass,
+  VkGraphicsPipelineCreateInfo,
+  VkPipeline,
+  vkCreateGraphicsPipelines,
+  vkDestroyPipeline,
 } from 'nvk'
+import { GLSL } from 'nvk-essentials'
 
 import { ASSERT_VK_RESULT } from './utils'
 
 const initVulkan = () => {
-  const win = new VulkanWindow({
-    width: 480,
-    height: 320,
-    title: 'typescript-example',
-  })
-
   class SwapChainSupportDetails {
     constructor(
       public capabilities: VkSurfaceCapabilitiesKHR = new VkSurfaceCapabilitiesKHR(),
@@ -214,7 +278,7 @@ const initVulkan = () => {
     return indices
   }
 
-  const createInstance = () => {
+  const createInstance = (window: VulkanWindow) => {
     const instance = new VkInstance()
 
     const appInfo = new VkApplicationInfo({
@@ -222,11 +286,11 @@ const initVulkan = () => {
       applicationVersion: VK_MAKE_VERSION(1, 0, 0),
       pEngineName: 'No Engine',
       engineVersion: VK_MAKE_VERSION(1, 0, 0),
-      apiVersion: VK_API_VERSION_1_0,
+      apiVersion: VK_MAKE_VERSION(1, 1, 0),
     })
 
     const validationLayers: string[] = ['VK_LAYER_KHRONOS_validation']
-    const instanceExtensions = win.getRequiredInstanceExtensions()
+    const instanceExtensions = window.getRequiredInstanceExtensions()
     instanceExtensions.push(
       (VK_EXT_DEBUG_UTILS_EXTENSION_NAME as unknown) as string,
     )
@@ -427,9 +491,9 @@ const initVulkan = () => {
     ] as const
   }
 
-  const createSurface = (instance: VkInstance) => {
+  const createSurface = (instance: VkInstance, window: VulkanWindow) => {
     const surface = new VkSurfaceKHR()
-    const surfaceResult = win.createSurface(instance, null, surface)
+    const surfaceResult = window.createSurface(instance, null, surface)
     ASSERT_VK_RESULT(surfaceResult, 'Unable to create window surface!')
 
     return [
@@ -566,12 +630,339 @@ const initVulkan = () => {
     ] as const
   }
 
+  const createImageViews = (
+    device: VkDevice,
+    swapChainImages: VkImage[],
+    swapChainImageFormat: VkFormat,
+  ) => {
+    const swapChainImageViews: VkImageView[] = new Array(swapChainImages.length)
+      .fill(0)
+      .map(() => new VkImageView())
+
+    for (let i = 0; i < swapChainImages.length; ++i) {
+      const createInfo = new VkImageViewCreateInfo({
+        image: swapChainImages[0],
+        viewType: VK_IMAGE_VIEW_TYPE_2D,
+        format: swapChainImageFormat,
+        components: new VkComponentMapping({
+          r: VK_COMPONENT_SWIZZLE_IDENTITY,
+          g: VK_COMPONENT_SWIZZLE_IDENTITY,
+          b: VK_COMPONENT_SWIZZLE_IDENTITY,
+          a: VK_COMPONENT_SWIZZLE_IDENTITY,
+        }),
+        subresourceRange: new VkImageSubresourceRange({
+          aspectMask: VK_IMAGE_ASPECT_COLOR_BIT,
+          baseMipLevel: 0,
+          levelCount: 1,
+          baseArrayLayer: 0,
+          layerCount: 1,
+        }),
+      })
+      const result = vkCreateImageView(
+        device,
+        createInfo,
+        null,
+        swapChainImageViews[i],
+      )
+      ASSERT_VK_RESULT(
+        result,
+        `Unable to create an image view for swapchain image under index ${i}`,
+      )
+    }
+
+    return [
+      swapChainImageViews,
+      () => {
+        for (const imageView of swapChainImageViews) {
+          vkDestroyImageView(device, imageView, null)
+        }
+      },
+    ] as const
+  }
+
+  const createShaderModule = (shaderName: string, bytecode: Uint8Array) => {
+    const createInfo = new VkShaderModuleCreateInfo({
+      codeSize: bytecode.byteLength,
+      pCode: bytecode,
+    })
+
+    const shaderModule = new VkShaderModule()
+    const result = vkCreateShaderModule(device, createInfo, null, shaderModule)
+    ASSERT_VK_RESULT(result, `Failed to compile shader: ${shaderName}`)
+
+    return [
+      shaderModule,
+      () => {
+        vkDestroyShaderModule(device, shaderModule, null)
+      },
+    ] as const
+  }
+
+  const createRenderPass = (
+    device: VkDevice,
+    swapChainImageFormat: VkFormat,
+  ) => {
+    const colorAttachment = new VkAttachmentDescription({
+      format: swapChainImageFormat,
+      samples: VK_SAMPLE_COUNT_1_BIT,
+      loadOp: VK_ATTACHMENT_LOAD_OP_CLEAR,
+      storeOp: VK_ATTACHMENT_STORE_OP_STORE,
+      stencilLoadOp: VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      stencilStoreOp: VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      initialLayout: VK_IMAGE_LAYOUT_UNDEFINED,
+      finalLayout: VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+    })
+
+    const colorAttachmentRef = new VkAttachmentReference({
+      attachment: 0,
+      layout: VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    })
+
+    const subpass = new VkSubpassDescription({
+      pipelineBindPoint: VK_PIPELINE_BIND_POINT_GRAPHICS,
+      colorAttachmentCount: 1,
+      // layout(location = 0) out vec4 outColor maps to the first element of this array
+      pColorAttachments: [colorAttachmentRef],
+    })
+
+    const renderPass = new VkRenderPass()
+    const renderPassCreateInfo = new VkRenderPassCreateInfo({
+      attachmentCount: 1,
+      pAttachments: [colorAttachment],
+      subpassCount: 1,
+      pSubpasses: [subpass],
+    })
+    const result = vkCreateRenderPass(
+      device,
+      renderPassCreateInfo,
+      null,
+      renderPass,
+    )
+    ASSERT_VK_RESULT(result, 'Unable to create a render pass!')
+
+    return [
+      renderPass,
+      () => {
+        vkDestroyRenderPass(device, renderPass, null)
+      },
+    ] as const
+  }
+
+  const createGraphicsPipeline = (
+    device: VkDevice,
+    renderPass: VkRenderPass,
+    swapChainExtent: VkExtent2D,
+  ) => {
+    const vertShader = GLSL.toSPIRVSync({
+      source: fs.readFileSync(path.resolve(__dirname, 'shaders/triangle.vert')),
+      extension: 'vert',
+      includeDirectories: [path.resolve(__dirname, 'shaders/include')],
+    })
+    if (vertShader.error) {
+      throw vertShader.error
+    }
+    const fragShader = GLSL.toSPIRVSync({
+      source: fs.readFileSync(path.resolve(__dirname, 'shaders/triangle.frag')),
+      extension: 'frag',
+      includeDirectories: [path.resolve(__dirname, 'shaders/include')],
+    })
+    if (fragShader.error) {
+      throw fragShader.error
+    }
+
+    const [vertShaderModule, destroyVertShaderModule] = createShaderModule(
+      'triangle.vert',
+      vertShader.output,
+    )
+    const [fragShaderModule, destroyFragShaderModule] = createShaderModule(
+      'triangle.frag',
+      fragShader.output,
+    )
+
+    const vertShaderStageInfo = new VkPipelineShaderStageCreateInfo({
+      stage: VK_SHADER_STAGE_VERTEX_BIT,
+      module: vertShaderModule,
+      pName: 'main',
+    })
+
+    const fragShaderStageInfo = new VkPipelineShaderStageCreateInfo({
+      stage: VK_SHADER_STAGE_FRAGMENT_BIT,
+      module: fragShaderModule,
+      pName: 'main',
+    })
+
+    const shaderStages = [vertShaderStageInfo, fragShaderStageInfo]
+
+    const vertexInputInfo = new VkPipelineVertexInputStateCreateInfo({
+      vertexBindingDescriptionCount: 0,
+      pVertexBindingDescriptions: null,
+      vertexAttributeDescriptionCount: 0,
+      pVertexAttributeDescriptions: null,
+    })
+
+    const inputAssembly = new VkPipelineInputAssemblyStateCreateInfo({
+      topology: VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+      primitiveRestartEnable: false,
+    })
+
+    const viewport = new VkViewport({
+      x: 0.0,
+      y: 0.0,
+      width: swapChainExtent.width,
+      height: swapChainExtent.height,
+      minDepth: 0.0,
+      maxDepth: 1.0,
+    })
+
+    const scissor = new VkRect2D({
+      offset: new VkOffset2D({
+        x: 0,
+        y: 0,
+      }),
+      extent: swapChainExtent,
+    })
+
+    const viewportState = new VkPipelineViewportStateCreateInfo({
+      viewportCount: 1,
+      pViewports: [viewport],
+      scissorCount: 1,
+      pScissors: [scissor],
+    })
+
+    const rasterizer = new VkPipelineRasterizationStateCreateInfo({
+      depthClampEnable: false,
+      rasterizerDiscardEnable: false,
+      polygonMode: VK_POLYGON_MODE_FILL,
+      lineWidth: 1.0,
+      cullMode: VK_CULL_MODE_BACK_BIT,
+      frontFace: VK_FRONT_FACE_CLOCKWISE,
+      depthBiasEnable: false,
+      depthBiasConstantFactor: 0.0,
+      depthBiasClamp: 0.0,
+      depthBiasSlopeFactor: 0.0,
+    })
+
+    const multisampling = new VkPipelineMultisampleStateCreateInfo({
+      sampleShadingEnable: false,
+      rasterizationSamples: VK_SAMPLE_COUNT_1_BIT,
+      minSampleShading: 1.0,
+      pSampleMask: null,
+      alphaToCoverageEnable: false,
+      alphaToOneEnable: false,
+    })
+
+    // NOTE: Additive alpha blending
+    const colorBlendAttachment = new VkPipelineColorBlendAttachmentState({
+      colorWriteMask:
+        VK_COLOR_COMPONENT_R_BIT |
+        VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT |
+        VK_COLOR_COMPONENT_A_BIT,
+      blendEnable: true,
+      srcColorBlendFactor: VK_BLEND_FACTOR_SRC_ALPHA,
+      dstColorBlendFactor: VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
+      colorBlendOp: VK_BLEND_OP_ADD,
+      srcAlphaBlendFactor: VK_BLEND_FACTOR_ONE,
+      dstAlphaBlendFactor: VK_BLEND_FACTOR_ZERO,
+      alphaBlendOp: VK_BLEND_OP_ADD,
+    })
+
+    const colorBlending = new VkPipelineColorBlendStateCreateInfo({
+      logicOpEnable: false,
+      logicOp: VK_LOGIC_OP_COPY,
+      attachmentCount: 1,
+      pAttachments: [colorBlendAttachment],
+      blendConstants: [0.0, 0.0, 0.0, 0.0],
+    })
+
+    const dynamicStates = new Int32Array([
+      VK_DYNAMIC_STATE_VIEWPORT,
+      VK_DYNAMIC_STATE_LINE_WIDTH,
+      VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+    ])
+
+    const dynamicState = new VkPipelineDynamicStateCreateInfo({
+      dynamicStateCount: dynamicStates.length,
+      pDynamicStates: dynamicStates,
+    })
+
+    const pipelineLayout = new VkPipelineLayout()
+
+    const pipelineLayoutCreateInfo = new VkPipelineLayoutCreateInfo({
+      setLayoutCount: 0,
+      pSetLayouts: null,
+      pushConstantRangeCount: 0,
+      pPushConstantRanges: null,
+    })
+    const result = vkCreatePipelineLayout(
+      device,
+      pipelineLayoutCreateInfo,
+      null,
+      pipelineLayout,
+    )
+    ASSERT_VK_RESULT(result, 'Unable to create pipeline layout!')
+
+    const pipelineCreateInfo = new VkGraphicsPipelineCreateInfo({
+      stageCount: 2,
+      pStages: shaderStages,
+
+      pVertexInputState: vertexInputInfo,
+      pInputAssemblyState: inputAssembly,
+      pViewportState: viewportState,
+      pRasterizationState: rasterizer,
+      pMultisampleState: multisampling,
+      pDepthStencilState: null,
+      pColorBlendState: colorBlending,
+      pDynamicState: null,
+
+      layout: pipelineLayout,
+      renderPass: renderPass,
+      subpass: 0,
+      // bottom two are used only if flags VK_PIPELINE_CREATE_DERIVATIVE_BIT
+      // is specified, used to inherit from already existing pipelines
+      basePipelineHandle: null,
+      basePipelineIndex: -1,
+    })
+
+    const graphicsPipeline = new VkPipeline()
+    const graphicsPipelineResult = vkCreateGraphicsPipelines(
+      device,
+      null,
+      1,
+      [pipelineCreateInfo],
+      null,
+      [graphicsPipeline],
+    )
+    ASSERT_VK_RESULT(
+      graphicsPipelineResult,
+      'Unable to create a graphics pipeline!',
+    )
+
+    destroyVertShaderModule()
+    destroyFragShaderModule()
+
+    return [
+      graphicsPipeline,
+      pipelineLayout,
+      () => {
+        vkDestroyPipeline(device, graphicsPipeline, null)
+        vkDestroyPipelineLayout(device, pipelineLayout, null)
+      },
+    ] as const
+  }
+
   const deviceExtensions = ([
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
   ] as unknown) as string[]
 
-  const [instance, enabledLayers, destroyInstance] = createInstance()
-  const [surface, destroySurface] = createSurface(instance)
+  const window = new VulkanWindow({
+    width: 480,
+    height: 320,
+    title: 'typescript-example',
+  })
+
+  const [instance, enabledLayers, destroyInstance] = createInstance(window)
+  const [surface, destroySurface] = createSurface(instance, window)
   const [
     physicalDevice,
     deviceProperties,
@@ -589,18 +980,35 @@ const initVulkan = () => {
   const [
     swapChain,
     swapChainImages,
-    swaChainImageFormat,
-    swapChainExtend,
+    swapChainImageFormat,
+    swapChainExtent,
     destroySwapChain,
   ] = createSwapChain(
     device,
     surface,
-    win,
+    window,
     swapChainDetails,
     queueFamilyIndices,
   )
+  const [swapChainImageViews, destroySwapChainImageViews] = createImageViews(
+    device,
+    swapChainImages,
+    swapChainImageFormat,
+  )
+  const [renderPass, destroyRenderPass] = createRenderPass(
+    device,
+    swapChainImageFormat,
+  )
+  const [
+    graphicsPipeline,
+    pipelineLayout,
+    destroyGraphicsPipelineLayout,
+  ] = createGraphicsPipeline(device, renderPass, swapChainExtent)
 
   const cleanup = () => {
+    destroyGraphicsPipelineLayout()
+    destroyRenderPass()
+    destroySwapChainImageViews()
     destroySwapChain()
     destroyDevice()
     destroySurface()
@@ -609,11 +1017,10 @@ const initVulkan = () => {
 
   return {
     loop: () => {
-      win.pollEvents()
-
-      if (win.shouldClose()) {
+      window.pollEvents()
+      if (window.shouldClose()) {
         cleanup()
-        win.close()
+        window.close()
         process.exit(0)
       }
     },
