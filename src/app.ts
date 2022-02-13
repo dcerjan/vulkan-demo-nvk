@@ -1288,8 +1288,8 @@ const initVulkan = () => {
   ] as unknown) as string[]
 
   const window = new VulkanWindow({
-    width: 480,
-    height: 320,
+    width: 1920 / 2,
+    height: 1080 / 2,
     title: 'typescript-example',
   })
 
@@ -1379,9 +1379,13 @@ const initVulkan = () => {
     destroyInstance()
   }
 
+  let lastFrameTime = performance.now()
+
   return {
     loop: () => {
       if (!window.shouldClose()) {
+        const now = performance.now()
+        const delta = (now - lastFrameTime) | 0
         drawFrame(
           device,
           swapChain,
@@ -1392,6 +1396,8 @@ const initVulkan = () => {
           rendererFinishedSemaphores,
           inFlightFences,
         )
+        window.title = `typescript-example - ${delta}ms`
+        lastFrameTime = now
         window.pollEvents()
       } else {
         cleanup()
