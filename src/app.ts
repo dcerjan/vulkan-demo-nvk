@@ -62,7 +62,6 @@ import {
   VkImageView,
   VkImageViewCreateInfo,
   VK_IMAGE_VIEW_TYPE_2D,
-  VkFormat,
   VkComponentMapping,
   VK_COMPONENT_SWIZZLE_IDENTITY,
   VkImageSubresourceRange,
@@ -176,15 +175,36 @@ import {
   VK_ERROR_OUT_OF_DATE_KHR,
   VK_SUCCESS,
   VK_SUBOPTIMAL_KHR,
+  VkBufferCreateInfo,
+  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+  VkBuffer,
+  vkCreateBuffer,
+  vkDestroyBuffer,
+  VkMemoryRequirements,
+  vkGetBufferMemoryRequirements,
+  VkMemoryPropertyFlagBits,
+  VkPhysicalDeviceMemoryProperties,
+  vkGetPhysicalDeviceMemoryProperties,
+  VkMemoryAllocateInfo,
+  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+  VkDeviceMemory,
+  vkAllocateMemory,
+  vkBindBufferMemory,
+  vkFreeMemory,
+  vkMapMemory,
+  vkUnmapMemory,
+  vkCmdBindVertexBuffers,
 } from 'nvk'
 import { GLSL } from 'nvk-essentials'
 
-import { ASSERT_VK_RESULT } from './utils'
+import { ASSERT_VK_RESULT, memoryCopy } from './utils'
+import { Vertex } from './Vertex'
 
 import SegfaultHandler from 'segfault-handler'
 SegfaultHandler.registerHandler('crash.log')
 
-const MAX_FRAMES_IN_FLIGHT = 1
+const MAX_FRAMES_IN_FLIGHT = 2
 
 class SwapChainSupportDetails {
   constructor(
@@ -210,6 +230,25 @@ const checkDeviceExtensionSupport = (physicalDevice: VkPhysicalDevice, extension
   vkEnumerateDeviceExtensionProperties(physicalDevice, null, extensionCount, availableExtensions)
 
   return extensions.every((ext) => availableExtensions.find((available) => available.extensionName === ext) != null)
+}
+
+const findMemoryType = (physicalDevice: VkPhysicalDevice, typeFilter: number, properties: VkMemoryPropertyFlagBits) => {
+  const memProperties = new VkPhysicalDeviceMemoryProperties()
+  vkGetPhysicalDeviceMemoryProperties(physicalDevice, memProperties)
+
+  for (let i = 0; i < memProperties.memoryTypeCount; ++i) {
+    if (
+      typeFilter & (1 << i) &&
+      memProperties != null &&
+      memProperties.memoryTypes != null &&
+      memProperties.memoryTypes[i] != null &&
+      memProperties.memoryTypes[i].propertyFlags & properties
+    ) {
+      return i
+    }
+  }
+
+  throw new Error('Unable to find suitable memory type!')
 }
 
 const querySwapChainSupport = (physicalDevice: VkPhysicalDevice, surface: VkSurfaceKHR) => {
@@ -342,6 +381,14 @@ const initVulkan = (
   let inFlightFences: VkFence[]
   let imagesInFlight: (VkFence | null)[]
   let framebufferResized = false
+  let vertexBuffer: VkBuffer
+  let vertexBufferMemory: VkDeviceMemory
+
+  const vertices = [
+    new Vertex([0.0, -0.5], [1.0, 1.0, 1.0]),
+    new Vertex([0.5, 0.5], [0.0, 1.0, 0.0]),
+    new Vertex([-0.5, 0.5], [0.0, 0.0, 1.0]),
+  ]
 
   const findQueueFamilies = (): void => {
     queueFamilyIndices = new QueueFamilyIndices()
@@ -700,11 +747,14 @@ const initVulkan = (
 
     const shaderStages = [vertShaderStageInfo, fragShaderStageInfo]
 
+    const bindingDescription = Vertex.getBindingDescription()
+    const attributeDescriptions = Vertex.getAttributeDescriptions()
+
     const vertexInputInfo = new VkPipelineVertexInputStateCreateInfo({
-      vertexBindingDescriptionCount: 0,
-      pVertexBindingDescriptions: null,
-      vertexAttributeDescriptionCount: 0,
-      pVertexAttributeDescriptions: null,
+      vertexBindingDescriptionCount: 1,
+      vertexAttributeDescriptionCount: attributeDescriptions.length,
+      pVertexBindingDescriptions: [bindingDescription],
+      pVertexAttributeDescriptions: attributeDescriptions,
     })
 
     const inputAssembly = new VkPipelineInputAssemblyStateCreateInfo({
@@ -867,6 +917,42 @@ const initVulkan = (
     )
   }
 
+  const createVertexBuffer = (): void => {
+    const buffer = Vertex.buffer(vertices)
+    const bufferInfo = new VkBufferCreateInfo({
+      size: buffer.buffer.byteLength,
+      usage: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+      sharingMode: VK_SHARING_MODE_EXCLUSIVE,
+    })
+    vertexBuffer = new VkBuffer()
+    ASSERT_VK_RESULT(vkCreateBuffer(device, bufferInfo, null, vertexBuffer), 'Unable to create vertex buffer!')
+
+    const memRequirements = new VkMemoryRequirements()
+    vkGetBufferMemoryRequirements(device, vertexBuffer, memRequirements)
+
+    const allocInfo = new VkMemoryAllocateInfo({
+      allocationSize: memRequirements.size,
+      memoryTypeIndex: findMemoryType(
+        physicalDevice,
+        memRequirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+      ),
+    })
+
+    vertexBufferMemory = new VkDeviceMemory()
+    ASSERT_VK_RESULT(
+      vkAllocateMemory(device, allocInfo, null, vertexBufferMemory),
+      'Unable to allocate vertex buffer memory!'
+    )
+
+    vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0)
+
+    const dataPtr = { $: 0n }
+    vkMapMemory(device, vertexBufferMemory, 0, buffer.buffer.byteLength, 0, dataPtr)
+    memoryCopy(dataPtr.$, buffer.buffer, buffer.buffer.byteLength)
+    vkUnmapMemory(device, vertexBufferMemory)
+  }
+
   const createCommandBuffers = () => {
     commandBuffers = new Array(swapChainFramebuffers.length).fill(0).map(() => new VkCommandBuffer())
 
@@ -906,7 +992,10 @@ const initVulkan = (
 
       vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline)
 
-      vkCmdDraw(commandBuffers[i], 3, 1, 0, 0)
+      // TODO: report to repo nvk has broken typings for BigUint64Array
+      vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, [vertexBuffer], new BigUint64Array([0n]) as any)
+
+      vkCmdDraw(commandBuffers[i], vertices.length, 1, 0, 0)
 
       vkCmdEndRenderPass(commandBuffers[i])
 
@@ -1029,11 +1118,15 @@ const initVulkan = (
   createGraphicsPipeline()
   createFramebuffers()
   createCommandPool()
+  createVertexBuffer()
   createCommandBuffers()
   createSyncObjects()
 
   const cleanup = () => {
     cleanupSwapChain()
+
+    vkDestroyBuffer(device, vertexBuffer, null)
+    vkFreeMemory(device, vertexBufferMemory, null)
 
     for (let i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
       vkDestroySemaphore(device, rendererFinishedSemaphores[i], null)

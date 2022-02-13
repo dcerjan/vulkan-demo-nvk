@@ -11,6 +11,7 @@
   "license": "ISC",
   "dependencies": {
     "@types/node": "^17.0.17",
+    "gl-matrix": "^3.4.3",
     "nvk": "^0.8.0",
     "nvk-essentials": "^0.1.2",
     "prettier": "^2.5.1",
