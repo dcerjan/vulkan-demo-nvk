@@ -128,10 +128,55 @@ import {
   VkPipeline,
   vkCreateGraphicsPipelines,
   vkDestroyPipeline,
+  VkFramebuffer,
+  VkFramebufferCreateInfo,
+  vkCreateFramebuffer,
+  vkDestroyFramebuffer,
+  VkCommandPoolCreateInfo,
+  VkCommandPool,
+  vkCreateCommandPool,
+  vkDestroyCommandPool,
+  VkCommandBuffer,
+  VkCommandBufferAllocateInfo,
+  VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+  vkAllocateCommandBuffers,
+  VkCommandBufferBeginInfo,
+  vkBeginCommandBuffer,
+  VkRenderPassBeginInfo,
+  VkClearValue,
+  VkClearColorValue,
+  vkCmdBeginRenderPass,
+  VK_SUBPASS_CONTENTS_INLINE,
+  vkCmdBindPipeline,
+  vkCmdDraw,
+  vkCmdEndRenderPass,
+  vkEndCommandBuffer,
+  VkSemaphore,
+  VkSemaphoreCreateInfo,
+  vkCreateSemaphore,
+  vkDestroySemaphore,
+  vkAcquireNextImageKHR,
+  VkSubmitInfo,
+  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+  vkQueueSubmit,
+  VkSubpassDependency,
+  VK_SUBPASS_EXTERNAL,
+  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+  VkPresentInfoKHR,
+  vkQueuePresentKHR,
+  VkFence,
+  vkCreateFence,
+  VkFenceCreateInfo,
+  vkDestroyFence,
+  vkWaitForFences,
+  vkResetFences,
+  VK_FENCE_CREATE_SIGNALED_BIT,
 } from 'nvk'
 import { GLSL } from 'nvk-essentials'
 
 import { ASSERT_VK_RESULT } from './utils'
+
+const MAX_FRAMES_IN_FLIGHT = 1
 
 const initVulkan = () => {
   class SwapChainSupportDetails {
@@ -482,9 +527,13 @@ const initVulkan = () => {
     const graphicsQueue = new VkQueue()
     vkGetDeviceQueue(device, indices.graphicsFamily!, 0, graphicsQueue)
 
+    const presentQueue = new VkQueue()
+    vkGetDeviceQueue(device, indices.presentFamily!, 0, presentQueue)
+
     return [
       device,
       graphicsQueue,
+      presentQueue,
       () => {
         vkDestroyDevice(device, null)
       },
@@ -641,7 +690,7 @@ const initVulkan = () => {
 
     for (let i = 0; i < swapChainImages.length; ++i) {
       const createInfo = new VkImageViewCreateInfo({
-        image: swapChainImages[0],
+        image: swapChainImages[i],
         viewType: VK_IMAGE_VIEW_TYPE_2D,
         format: swapChainImageFormat,
         components: new VkComponentMapping({
@@ -725,12 +774,23 @@ const initVulkan = () => {
       pColorAttachments: [colorAttachmentRef],
     })
 
+    const dependency = new VkSubpassDependency({
+      srcSubpass: VK_SUBPASS_EXTERNAL,
+      dstSubpass: 0,
+      srcStageMask: VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      srcAccessMask: 0,
+      dstStageMask: VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      dstAccessMask: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+    })
+
     const renderPass = new VkRenderPass()
     const renderPassCreateInfo = new VkRenderPassCreateInfo({
       attachmentCount: 1,
       pAttachments: [colorAttachment],
       subpassCount: 1,
       pSubpasses: [subpass],
+      dependencyCount: 1,
+      pDependencies: [dependency],
     })
     const result = vkCreateRenderPass(
       device,
@@ -951,6 +1011,278 @@ const initVulkan = () => {
     ] as const
   }
 
+  const createFramebuffers = (
+    device: VkDevice,
+    renderPass: VkRenderPass,
+    swapChainImageViews: VkImageView[],
+    swapChainExtent: VkExtent2D,
+  ) => {
+    const swapChainFramebuffers = new Array(swapChainImageViews.length)
+      .fill(0)
+      .map(() => new VkFramebuffer())
+
+    for (let i = 0; i < swapChainImageViews.length; ++i) {
+      const framebufferInfo = new VkFramebufferCreateInfo({
+        renderPass: renderPass,
+        attachmentCount: 1,
+        pAttachments: [swapChainImageViews[i]],
+        width: swapChainExtent.width,
+        height: swapChainExtent.height,
+        layers: 1,
+      })
+
+      const result = vkCreateFramebuffer(
+        device,
+        framebufferInfo,
+        null,
+        swapChainFramebuffers[i],
+      )
+      ASSERT_VK_RESULT(
+        result,
+        `Unable to create a swapchain framebuffer at index ${i}`,
+      )
+    }
+
+    return [
+      swapChainFramebuffers,
+      () => {
+        for (const framebuffer of swapChainFramebuffers) {
+          vkDestroyFramebuffer(device, framebuffer, null)
+        }
+      },
+    ] as const
+  }
+
+  const createCommandPool = (
+    device: VkDevice,
+    queueFamilyIndices: QueueFamilyIndices,
+  ) => {
+    const poolCreateInfo = new VkCommandPoolCreateInfo({
+      queueFamilyIndex: queueFamilyIndices.graphicsFamily!,
+      flags: 0,
+    })
+    const commandPool = new VkCommandPool()
+    const result = vkCreateCommandPool(
+      device,
+      poolCreateInfo,
+      null,
+      commandPool,
+    )
+    ASSERT_VK_RESULT(result, 'Unable to create graphics command pool')
+
+    return [
+      commandPool,
+      () => {
+        vkDestroyCommandPool(device, commandPool, null)
+      },
+    ] as const
+  }
+
+  const crateCommandBuffers = (
+    renderPass: VkRenderPass,
+    swapChainFramebuffers: VkFramebuffer[],
+    commandPool: VkCommandPool,
+    swapChainExtent: VkExtent2D,
+    graphicsPipeline: VkPipeline,
+  ) => {
+    const commandBuffers = new Array(swapChainFramebuffers.length)
+      .fill(0)
+      .map(() => new VkCommandBuffer())
+
+    const allocInfo = new VkCommandBufferAllocateInfo({
+      commandPool: commandPool,
+      level: VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+      commandBufferCount: commandBuffers.length,
+    })
+    const result = vkAllocateCommandBuffers(device, allocInfo, commandBuffers)
+    ASSERT_VK_RESULT(result, 'Unable to allocate command buffers!')
+
+    for (let i = 0; i < commandBuffers.length; ++i) {
+      const beginInfo = new VkCommandBufferBeginInfo({
+        flags: 0,
+        pInheritanceInfo: null,
+      })
+
+      const result = vkBeginCommandBuffer(commandBuffers[i], beginInfo)
+      ASSERT_VK_RESULT(
+        result,
+        `Unable to begin recording a command buffer under index ${i}`,
+      )
+
+      const clearColor = new VkClearValue({
+        color: new VkClearColorValue({ float32: [0.0, 0.0, 0.0, 0.0] }),
+      })
+      const renderPassInfo = new VkRenderPassBeginInfo({
+        renderPass,
+        framebuffer: swapChainFramebuffers[i],
+        renderArea: new VkRect2D({
+          offset: new VkOffset2D({ x: 0, y: 0 }),
+          extent: swapChainExtent,
+        }),
+        clearValueCount: 1,
+        pClearValues: [clearColor],
+      })
+
+      vkCmdBeginRenderPass(
+        commandBuffers[i],
+        renderPassInfo,
+        VK_SUBPASS_CONTENTS_INLINE,
+      )
+
+      vkCmdBindPipeline(
+        commandBuffers[i],
+        VK_PIPELINE_BIND_POINT_GRAPHICS,
+        graphicsPipeline,
+      )
+
+      vkCmdDraw(commandBuffers[i], 3, 1, 0, 0)
+
+      vkCmdEndRenderPass(commandBuffers[i])
+
+      const endResult = vkEndCommandBuffer(commandBuffers[i])
+      ASSERT_VK_RESULT(
+        endResult,
+        `Unable to record command buffer at index ${i}`,
+      )
+    }
+
+    return commandBuffers
+  }
+
+  const createSyncObjects = (device: VkDevice, swapChainImages: VkImage[]) => {
+    const semaphoreCreateInfo = new VkSemaphoreCreateInfo()
+    const imageAvailableSemaphores = new Array(MAX_FRAMES_IN_FLIGHT)
+      .fill(0)
+      .map(() => new VkSemaphore())
+    const rendererFinishedSemaphores = new Array(MAX_FRAMES_IN_FLIGHT)
+      .fill(0)
+      .map(() => new VkSemaphore())
+    const fenceCreateInfo = new VkFenceCreateInfo({
+      flags: VK_FENCE_CREATE_SIGNALED_BIT,
+    })
+    const inFlightFences = new Array(MAX_FRAMES_IN_FLIGHT)
+      .fill(0)
+      .map(() => new VkFence())
+    const imagesInFlight: (VkFence | null)[] = new Array(swapChainImages.length)
+      .fill(0)
+      .map(() => null)
+
+    for (let i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+      ASSERT_VK_RESULT(
+        vkCreateSemaphore(
+          device,
+          semaphoreCreateInfo,
+          null,
+          imageAvailableSemaphores[i],
+        ),
+        `Failed to create imageAvailableSemaphores[${i}]!`,
+      )
+      ASSERT_VK_RESULT(
+        vkCreateSemaphore(
+          device,
+          semaphoreCreateInfo,
+          null,
+          rendererFinishedSemaphores[i],
+        ),
+        `Failed to create rendererFinishedSemaphores[${i}]!`,
+      )
+      ASSERT_VK_RESULT(
+        vkCreateFence(device, fenceCreateInfo, null, inFlightFences[i]),
+        `Failed to create inFlightFences[${i}]!`,
+      )
+    }
+
+    return [
+      imageAvailableSemaphores,
+      rendererFinishedSemaphores,
+      inFlightFences,
+      imagesInFlight,
+      () => {
+        rendererFinishedSemaphores.forEach((semaphore) => {
+          vkDestroySemaphore(device, semaphore, null)
+        })
+        imageAvailableSemaphores.forEach((semaphore) => {
+          vkDestroySemaphore(device, semaphore, null)
+        })
+        inFlightFences.forEach((fence) => {
+          vkDestroyFence(device, fence, null)
+        })
+      },
+    ] as const
+  }
+
+  let currentFrame = 0
+  const drawFrame = (
+    device: VkDevice,
+    swapChain: VkSwapchainKHR,
+    commandBuffers: VkCommandBuffer[],
+    graphicsQueue: VkQueue,
+    presentQueue: VkQueue,
+    imageAvailableSemaphores: VkSemaphore[],
+    rendererFinishedSemaphores: VkSemaphore[],
+    inFlightFences: VkFence[],
+  ) => {
+    vkWaitForFences(
+      device,
+      1,
+      [inFlightFences[currentFrame]],
+      true,
+      Number.MAX_SAFE_INTEGER,
+    )
+
+    const imageIndex = { $: 0 }
+    vkAcquireNextImageKHR(
+      device,
+      swapChain,
+      Number.MAX_SAFE_INTEGER,
+      imageAvailableSemaphores[currentFrame],
+      null,
+      imageIndex,
+    )
+
+    const fence = imagesInFlight[imageIndex.$]
+    if (fence != null) {
+      vkWaitForFences(device, 1, [fence], true, Number.MAX_SAFE_INTEGER)
+    }
+    imagesInFlight[imageIndex.$] = inFlightFences[currentFrame]
+
+    const waitStages = new Int32Array([
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    ])
+    const submitInfo = new VkSubmitInfo({
+      waitSemaphoreCount: 1,
+      pWaitSemaphores: [imageAvailableSemaphores[currentFrame]],
+      pWaitDstStageMask: waitStages,
+      commandBufferCount: 1,
+      pCommandBuffers: [commandBuffers[imageIndex.$]],
+      signalSemaphoreCount: 1,
+      pSignalSemaphores: [rendererFinishedSemaphores[currentFrame]],
+    })
+
+    vkResetFences(device, 1, [inFlightFences[currentFrame]])
+    const result = vkQueueSubmit(
+      graphicsQueue,
+      1,
+      [submitInfo],
+      inFlightFences[currentFrame],
+    )
+    ASSERT_VK_RESULT(result, 'Unable to submit draw command buffer!')
+
+    const presentInfo = new VkPresentInfoKHR({
+      waitSemaphoreCount: 1,
+      pWaitSemaphores: [rendererFinishedSemaphores[currentFrame]],
+      swapchainCount: 1,
+      pSwapchains: [swapChain],
+      pImageIndices: new Uint32Array([imageIndex.$]),
+      pResults: null,
+    })
+
+    const presentResult = vkQueuePresentKHR(presentQueue, presentInfo)
+    ASSERT_VK_RESULT(presentResult, 'Unable to present queue!')
+
+    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT
+  }
+
   const deviceExtensions = ([
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
   ] as unknown) as string[]
@@ -970,7 +1302,12 @@ const initVulkan = () => {
     swapChainDetails,
   ] = pickPhysicalDevice(instance, surface, deviceExtensions)!
   const queueFamilyIndices = findQueueFamilies(physicalDevice, surface)
-  const [device, graphicsQueue, destroyDevice] = createLogicalDevice(
+  const [
+    device,
+    graphicsQueue,
+    presentQueue,
+    destroyDevice,
+  ] = createLogicalDevice(
     physicalDevice,
     queueFamilyIndices,
     deviceFeatures,
@@ -1004,8 +1341,35 @@ const initVulkan = () => {
     pipelineLayout,
     destroyGraphicsPipelineLayout,
   ] = createGraphicsPipeline(device, renderPass, swapChainExtent)
+  const [swapChainFramebuffers, destroyFramebuffers] = createFramebuffers(
+    device,
+    renderPass,
+    swapChainImageViews,
+    swapChainExtent,
+  )
+  const [commandPool, destroyCommandPool] = createCommandPool(
+    device,
+    queueFamilyIndices,
+  )
+  const commandBuffers = crateCommandBuffers(
+    renderPass,
+    swapChainFramebuffers,
+    commandPool,
+    swapChainExtent,
+    graphicsPipeline,
+  )
+  const [
+    imageAvailableSemaphores,
+    rendererFinishedSemaphores,
+    inFlightFences,
+    imagesInFlight,
+    destroySemaphores,
+  ] = createSyncObjects(device, swapChainImages)
 
   const cleanup = () => {
+    destroySemaphores()
+    destroyCommandPool()
+    destroyFramebuffers()
     destroyGraphicsPipelineLayout()
     destroyRenderPass()
     destroySwapChainImageViews()
@@ -1017,11 +1381,24 @@ const initVulkan = () => {
 
   return {
     loop: () => {
-      window.pollEvents()
-      if (window.shouldClose()) {
+      if (!window.shouldClose()) {
+        drawFrame(
+          device,
+          swapChain,
+          commandBuffers,
+          graphicsQueue,
+          presentQueue,
+          imageAvailableSemaphores,
+          rendererFinishedSemaphores,
+          inFlightFences,
+        )
+        window.pollEvents()
+      } else {
         cleanup()
-        window.close()
-        process.exit(0)
+        setTimeout(() => {
+          window.close()
+          process.exit(0)
+        }, 100)
       }
     },
   }
