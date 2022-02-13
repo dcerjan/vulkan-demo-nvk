@@ -10,11 +10,7 @@ declare module 'nvk-essentials' {
   }
   export var GLSL: {
     version: () => string
-    toSPIRV: (
-      options: CompilerOptions,
-    ) => Promise<{ error: Error | null; output: Uint8Array }>
-    toSPIRVSync: (
-      options: CompilerOptions,
-    ) => { error: Error | null; output: Uint8Array }
+    toSPIRV: (options: CompilerOptions) => Promise<{ error: Error | null; output: Uint8Array }>
+    toSPIRVSync: (options: CompilerOptions) => { error: Error | null; output: Uint8Array }
   }
 }
