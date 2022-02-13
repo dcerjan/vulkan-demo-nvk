@@ -171,53 +171,180 @@ import {
   vkWaitForFences,
   vkResetFences,
   VK_FENCE_CREATE_SIGNALED_BIT,
+  vkDeviceWaitIdle,
+  vkFreeCommandBuffers,
+  VK_ERROR_OUT_OF_DATE_KHR,
+  VK_SUCCESS,
+  VK_SUBOPTIMAL_KHR,
 } from 'nvk'
 import { GLSL } from 'nvk-essentials'
 
 import { ASSERT_VK_RESULT } from './utils'
 
+import SegfaultHandler from 'segfault-handler'
+SegfaultHandler.registerHandler('crash.log')
+
 const MAX_FRAMES_IN_FLIGHT = 1
 
-const initVulkan = () => {
-  class SwapChainSupportDetails {
-    constructor(
-      public capabilities: VkSurfaceCapabilitiesKHR = new VkSurfaceCapabilitiesKHR(),
-      public formats: VkSurfaceFormatKHR[] = [],
-      public presentModes: Int32Array = new Int32Array()
-    ) {}
+class SwapChainSupportDetails {
+  constructor(
+    public capabilities: VkSurfaceCapabilitiesKHR = new VkSurfaceCapabilitiesKHR(),
+    public formats: VkSurfaceFormatKHR[] = [],
+    public presentModes: Int32Array = new Int32Array()
+  ) {}
+}
+
+class QueueFamilyIndices {
+  constructor(public graphicsFamily: null | number = null, public presentFamily: null | number = null) {}
+
+  public isComplete() {
+    return this.graphicsFamily != null && this.presentFamily != null
+  }
+}
+
+const checkDeviceExtensionSupport = (physicalDevice: VkPhysicalDevice, extensions: string[]): boolean => {
+  const extensionCount = { $: 0 }
+  vkEnumerateDeviceExtensionProperties(physicalDevice, null, extensionCount, null)
+
+  const availableExtensions = new Array(extensionCount.$).fill(0).map(() => new VkExtensionProperties())
+  vkEnumerateDeviceExtensionProperties(physicalDevice, null, extensionCount, availableExtensions)
+
+  return extensions.every((ext) => availableExtensions.find((available) => available.extensionName === ext) != null)
+}
+
+const querySwapChainSupport = (physicalDevice: VkPhysicalDevice, surface: VkSurfaceKHR) => {
+  const details = new SwapChainSupportDetails()
+
+  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, details.capabilities)
+
+  const formatCount = { $: 0 }
+  vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, formatCount, null)
+  if (formatCount.$ != 0) {
+    details.formats = new Array(formatCount.$).fill(0).map(() => new VkSurfaceFormatKHR())
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, formatCount, details.formats)
   }
 
-  const querySwapChainSupport = (physicalDevice: VkPhysicalDevice, surface: VkSurfaceKHR) => {
-    const details = new SwapChainSupportDetails()
-
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, details.capabilities)
-
-    const formatCount = { $: 0 }
-    vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, formatCount, null)
-    if (formatCount.$ != 0) {
-      details.formats = new Array(formatCount.$).fill(0).map(() => new VkSurfaceFormatKHR())
-      vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, formatCount, details.formats)
-    }
-
-    const presentModesCount = { $: 0 }
-    vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, presentModesCount, null)
-    if (presentModesCount.$ != 0) {
-      details.presentModes = new Int32Array(new Array(presentModesCount.$).fill(0))
-      vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, presentModesCount, details.presentModes)
-    }
-
-    return details
+  const presentModesCount = { $: 0 }
+  vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, presentModesCount, null)
+  if (presentModesCount.$ != 0) {
+    details.presentModes = new Int32Array(new Array(presentModesCount.$).fill(0))
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, presentModesCount, details.presentModes)
   }
 
-  class QueueFamilyIndices {
-    constructor(public graphicsFamily: null | number = null, public presentFamily: null | number = null) {}
+  return details
+}
 
-    public isComplete() {
-      return this.graphicsFamily != null && this.presentFamily != null
-    }
+const isDeviceSuitable = (device: VkPhysicalDevice, surface: VkSurfaceKHR, extensions: string[]) => {
+  const properties = new VkPhysicalDeviceProperties()
+  vkGetPhysicalDeviceProperties(device, properties)
+
+  const features = new VkPhysicalDeviceFeatures()
+  vkGetPhysicalDeviceFeatures(device, features)
+
+  const extensionsSupported = checkDeviceExtensionSupport(device, extensions)
+
+  let swapChainAdequate = false
+  let swapChainSupport: SwapChainSupportDetails
+  if (extensionsSupported) {
+    swapChainSupport = querySwapChainSupport(device, surface)
+    swapChainAdequate = swapChainSupport.formats.length != 0 && swapChainSupport.presentModes.length != 0
   }
-  const findQueueFamilies = (physicalDevice: VkPhysicalDevice, surface: VkSurfaceKHR): QueueFamilyIndices => {
-    const indices = new QueueFamilyIndices()
+
+  const suitable =
+    properties.deviceType === VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
+    features.geometryShader &&
+    extensionsSupported &&
+    swapChainAdequate
+
+  return { suitable, properties, features, swapChainSupport: swapChainSupport! }
+}
+
+const chooseSwapSurfaceFormat = (availableFormats: VkSurfaceFormatKHR[]) => {
+  return (
+    availableFormats.find(
+      (fmt) => fmt.format === VK_FORMAT_B8G8R8A8_SRGB && fmt.colorSpace === VK_COLORSPACE_SRGB_NONLINEAR_KHR
+    ) ?? availableFormats[0]
+  )
+}
+
+const chooseSwapPresentMode = (presentModes: Int32Array) => {
+  return presentModes.find((md) => md === VK_PRESENT_MODE_MAILBOX_KHR) ?? (VK_PRESENT_MODE_FIFO_KHR as VkPresentModeKHR)
+}
+
+const chooseSwapExtent = (window: VulkanWindow, capabilities: VkSurfaceCapabilitiesKHR) => {
+  if (capabilities.currentExtent!.width != 0xffffffff) {
+    return capabilities.currentExtent!
+  } else {
+    const width = window.frameBufferWidth
+    const height = window.frameBufferWidth
+
+    const extent = new VkExtent2D({
+      width: Math.min(Math.max(width, capabilities.minImageExtent!.width), capabilities.maxImageExtent!.width),
+      height: Math.min(Math.max(height, capabilities.minImageExtent!.height), capabilities.maxImageExtent!.height),
+    })
+
+    return extent
+  }
+}
+
+const createShaderModule = (device: VkDevice, shaderName: string, bytecode: Uint8Array) => {
+  const createInfo = new VkShaderModuleCreateInfo({
+    codeSize: bytecode.byteLength,
+    pCode: bytecode,
+  })
+
+  const shaderModule = new VkShaderModule()
+  ASSERT_VK_RESULT(
+    vkCreateShaderModule(device, createInfo, null, shaderModule),
+    `Failed to compile shader: ${shaderName}`
+  )
+
+  return [
+    shaderModule,
+    () => {
+      vkDestroyShaderModule(device, shaderModule, null)
+    },
+  ] as const
+}
+
+const initVulkan = (
+  windowSize: { x: number; y: number } = { x: 1920, y: 1080 },
+  windowTitle: string = 'typescript-example',
+  validationLayers: string[] = ['VK_LAYER_KHRONOS_validation'],
+  extensions: string[] = [(VK_KHR_SWAPCHAIN_EXTENSION_NAME as unknown) as string]
+) => {
+  let window: VulkanWindow
+  let instance: VkInstance
+  let enabledValidationLayers: string[]
+  let physicalDevice: VkPhysicalDevice
+  let physicalDeviceProperties: VkPhysicalDeviceProperties
+  let physicalDeviceFeatures: VkPhysicalDeviceFeatures
+  let surface: VkSurfaceKHR
+  let device: VkDevice
+  let swapChainSupportDetails: SwapChainSupportDetails
+  let queueFamilyIndices: QueueFamilyIndices
+  let presentQueue: VkQueue
+  let graphicsQueue: VkQueue
+  let swapChain: VkSwapchainKHR
+  let swapChainImages: VkImage[]
+  let surfaceFormat: VkSurfaceFormatKHR
+  let presentMode: VkPresentModeKHR
+  let swapChainImageExtent: VkExtent2D
+  let swapChainImageViews: VkImageView[]
+  let renderPass: VkRenderPass
+  let pipelineLayout: VkPipelineLayout
+  let graphicsPipeline: VkPipeline
+  let swapChainFramebuffers: VkFramebuffer[]
+  let commandPool: VkCommandPool
+  let commandBuffers: VkCommandBuffer[]
+  let imageAvailableSemaphores: VkSemaphore[]
+  let rendererFinishedSemaphores: VkSemaphore[]
+  let inFlightFences: VkFence[]
+  let imagesInFlight: (VkFence | null)[]
+  let framebufferResized = false
+
+  const findQueueFamilies = (): void => {
+    queueFamilyIndices = new QueueFamilyIndices()
     const queueFamilyCount = { $: 0 }
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, queueFamilyCount, null)
 
@@ -237,36 +364,45 @@ const initVulkan = () => {
     for (let i = 0; i < queueFamilies.length; ++i) {
       const queueFamily = queueFamilies[i]
       if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-        indices.graphicsFamily = i
+        queueFamilyIndices.graphicsFamily = i
       }
 
       const presentSupport = { $: false }
       vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, i, surface, presentSupport)
 
       if (presentSupport.$) {
-        indices.presentFamily = i
+        queueFamilyIndices.presentFamily = i
       }
 
-      if (indices.isComplete()) {
+      if (queueFamilyIndices.isComplete()) {
         break
       }
     }
-
-    return indices
   }
 
-  const createInstance = (window: VulkanWindow) => {
-    const instance = new VkInstance()
+  const createWindow = (): void => {
+    window = new VulkanWindow({
+      width: windowSize.x,
+      height: windowSize.y,
+      title: windowTitle,
+    })
+
+    window.onresize = (ev) => {
+      framebufferResized = true
+    }
+  }
+
+  const createInstance = (): void => {
+    instance = new VkInstance()
 
     const appInfo = new VkApplicationInfo({
       pApplicationName: 'Hello!',
       applicationVersion: VK_MAKE_VERSION(1, 0, 0),
       pEngineName: 'No Engine',
       engineVersion: VK_MAKE_VERSION(1, 0, 0),
-      apiVersion: VK_MAKE_VERSION(1, 1, 0),
+      apiVersion: VK_MAKE_VERSION(1, 2, 0),
     })
 
-    const validationLayers: string[] = ['VK_LAYER_KHRONOS_validation']
     const instanceExtensions = window.getRequiredInstanceExtensions()
     instanceExtensions.push((VK_EXT_DEBUG_UTILS_EXTENSION_NAME as unknown) as string)
 
@@ -279,72 +415,26 @@ const initVulkan = () => {
       pNext: null,
     })
 
-    const result = vkCreateInstance(instanceInfo, null, instance)
-    ASSERT_VK_RESULT(result, 'Failed to create VkInstance!')
+    ASSERT_VK_RESULT(vkCreateInstance(instanceInfo, null, instance), 'Failed to create VkInstance!')
 
     const layerCount = { $: 0 }
     vkEnumerateInstanceLayerProperties(layerCount, null)
     const constAvailableLayers = new Array(layerCount.$).fill(null).map(() => new VkLayerProperties())
     vkEnumerateInstanceLayerProperties(layerCount, constAvailableLayers)
 
-    const allFoundLayers = validationLayers.filter((layerName) =>
+    enabledValidationLayers = validationLayers.filter((layerName) =>
       constAvailableLayers.some((availableLayer) => availableLayer.layerName === layerName)
     )
-    if (allFoundLayers.length !== validationLayers.length) {
+    if (enabledValidationLayers.length !== validationLayers.length) {
       throw new Error(
         `Not all validation layers are present: Expected: [${validationLayers.join(
           ', '
-        )}], found: [${allFoundLayers.join(', ')}]`
+        )}], found: [${enabledValidationLayers.join(', ')}]`
       )
     }
-
-    return [
-      instance,
-      allFoundLayers,
-      () => {
-        vkDestroyInstance(instance, null)
-      },
-    ] as const
   }
 
-  const checkDeviceExtensionSupport = (device: VkPhysicalDevice, extensions: string[]) => {
-    const extensionCount = { $: 0 }
-    vkEnumerateDeviceExtensionProperties(device, null, extensionCount, null)
-
-    const availableExtensions = new Array(extensionCount.$).fill(0).map(() => new VkExtensionProperties())
-    vkEnumerateDeviceExtensionProperties(device, null, extensionCount, availableExtensions)
-
-    return extensions.every((ext) => availableExtensions.find((available) => available.extensionName === ext) != null)
-  }
-
-  const isDeviceSuitable = (device: VkPhysicalDevice, surface: VkSurfaceKHR, extensions: string[]) => {
-    const deviceProperties = new VkPhysicalDeviceProperties()
-    vkGetPhysicalDeviceProperties(device, deviceProperties)
-
-    const deviceFeatures = new VkPhysicalDeviceFeatures()
-    vkGetPhysicalDeviceFeatures(device, deviceFeatures)
-
-    const extensionsSupported = checkDeviceExtensionSupport(device, extensions)
-
-    let swapChainAdequate = false
-    let swapChainSupport: SwapChainSupportDetails
-    if (extensionsSupported) {
-      swapChainSupport = querySwapChainSupport(device, surface)
-      swapChainAdequate = swapChainSupport.formats.length != 0 && swapChainSupport.presentModes.length != 0
-    }
-
-    const isSuitable =
-      deviceProperties.deviceType === VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
-      deviceFeatures.geometryShader &&
-      extensionsSupported &&
-      swapChainAdequate
-
-    return [isSuitable, deviceProperties, deviceFeatures, swapChainSupport!] as const
-  }
-
-  const pickPhysicalDevice = (instance: VkInstance, surface: VkSurfaceKHR, extensions: string[]) => {
-    let physicalDevice: typeof VK_NULL_HANDLE | VkPhysicalDevice = VK_NULL_HANDLE
-
+  const pickPhysicalDevice = (): void => {
     const deviceCount = { $: 0 }
     vkEnumeratePhysicalDevices(instance, deviceCount, null)
     if (deviceCount.$ <= 0) {
@@ -355,27 +445,25 @@ const initVulkan = () => {
     vkEnumeratePhysicalDevices(instance, deviceCount, physicalDevices)
 
     for (const device of physicalDevices) {
-      const [suitable, properties, features, swapChanDetails] = isDeviceSuitable(device, surface, extensions)
+      const { suitable, properties, features, swapChainSupport } = isDeviceSuitable(device, surface, extensions)
       if (suitable) {
         physicalDevice = device
-        return [physicalDevice as VkPhysicalDevice, properties, features, swapChanDetails] as const
+        physicalDeviceProperties = properties
+        physicalDeviceFeatures = features
+        swapChainSupportDetails = swapChainSupport
       }
     }
 
-    if (physicalDevice === VK_NULL_HANDLE) {
+    if (physicalDevice == null) {
       throw new Error('Unable to find a suitable GPU!')
     }
   }
 
-  const createLogicalDevice = (
-    physicalDevice: VkPhysicalDevice,
-    indices: QueueFamilyIndices,
-    features: VkPhysicalDeviceFeatures,
-    enabledLayers: string[],
-    extensions: string[]
-  ) => {
+  const createLogicalDevice = (): void => {
     const queuePriority = new Float32Array([1.0])
-    const uniqueQueueFamilies = Array.from(new Set([indices.graphicsFamily, indices.presentFamily]))
+    const uniqueQueueFamilies = Array.from(
+      new Set([queueFamilyIndices.graphicsFamily, queueFamilyIndices.presentFamily])
+    )
     const queueCreateInfos: VkDeviceQueueCreateInfo[] = uniqueQueueFamilies.map(
       (index) =>
         new VkDeviceQueueCreateInfo({
@@ -388,101 +476,61 @@ const initVulkan = () => {
     const deviceCreateInfo = new VkDeviceCreateInfo({
       pQueueCreateInfos: queueCreateInfos,
       queueCreateInfoCount: queueCreateInfos.length,
-      pEnabledFeatures: features,
+      pEnabledFeatures: physicalDeviceFeatures,
       enabledExtensionCount: extensions.length,
       ppEnabledExtensionNames: extensions,
-      enabledLayerCount: enabledLayers.length,
-      ppEnabledLayerNames: enabledLayers,
+      enabledLayerCount: enabledValidationLayers.length,
+      ppEnabledLayerNames: enabledValidationLayers,
     })
 
-    const device = new VkDevice()
-    const result = vkCreateDevice(physicalDevice, deviceCreateInfo, null, device)
-    ASSERT_VK_RESULT(result, 'Unable to create a logical device!')
-
-    const graphicsQueue = new VkQueue()
-    vkGetDeviceQueue(device, indices.graphicsFamily!, 0, graphicsQueue)
-
-    const presentQueue = new VkQueue()
-    vkGetDeviceQueue(device, indices.presentFamily!, 0, presentQueue)
-
-    return [
-      device,
-      graphicsQueue,
-      presentQueue,
-      () => {
-        vkDestroyDevice(device, null)
-      },
-    ] as const
-  }
-
-  const createSurface = (instance: VkInstance, window: VulkanWindow) => {
-    const surface = new VkSurfaceKHR()
-    const surfaceResult = window.createSurface(instance, null, surface)
-    ASSERT_VK_RESULT(surfaceResult, 'Unable to create window surface!')
-
-    return [
-      surface,
-      () => {
-        vkDestroySurfaceKHR(instance, surface, null)
-      },
-    ] as const
-  }
-
-  const chooseSwapSurfaceFormat = (availableFormats: VkSurfaceFormatKHR[]) => {
-    const format = availableFormats.find(
-      (fmt) => fmt.format === VK_FORMAT_B8G8R8A8_SRGB && fmt.colorSpace === VK_COLORSPACE_SRGB_NONLINEAR_KHR
+    device = new VkDevice()
+    ASSERT_VK_RESULT(
+      vkCreateDevice(physicalDevice, deviceCreateInfo, null, device),
+      'Unable to create a logical device!'
     )
 
-    return format ?? availableFormats[0]
+    graphicsQueue = new VkQueue()
+    vkGetDeviceQueue(device, queueFamilyIndices.graphicsFamily!, 0, graphicsQueue)
+
+    presentQueue = new VkQueue()
+    vkGetDeviceQueue(device, queueFamilyIndices.presentFamily!, 0, presentQueue)
   }
 
-  const chooseSwapPresentMode = (availablePresentModes: VkPresentModeKHR[]) => {
-    const mode = availablePresentModes.find((md) => md === VK_PRESENT_MODE_MAILBOX_KHR)
-
-    return mode ?? VK_PRESENT_MODE_FIFO_KHR
+  const createSurface = (): void => {
+    surface = new VkSurfaceKHR()
+    ASSERT_VK_RESULT(window.createSurface(instance, null, surface), 'Unable to create window surface!')
   }
 
-  const chooseSwapExtent = (capabilities: VkSurfaceCapabilitiesKHR, window: VulkanWindow) => {
-    if (capabilities.currentExtent!.width != 0xffffffff) {
-      return capabilities.currentExtent!
-    } else {
-      const width = window.frameBufferWidth
-      const height = window.frameBufferWidth
+  const createSwapChain = (): void => {
+    swapChainSupportDetails = querySwapChainSupport(physicalDevice, surface)
 
-      const extent = new VkExtent2D({
-        width: Math.min(Math.max(width, capabilities.minImageExtent!.width), capabilities.maxImageExtent!.width),
-        height: Math.min(Math.max(height, capabilities.minImageExtent!.height), capabilities.maxImageExtent!.height),
-      })
+    surfaceFormat = chooseSwapSurfaceFormat(swapChainSupportDetails.formats)
+    presentMode = chooseSwapPresentMode(swapChainSupportDetails.presentModes)
+    swapChainImageExtent = chooseSwapExtent(window, swapChainSupportDetails.capabilities)
 
-      return extent
+    let imageCount = swapChainSupportDetails.capabilities.minImageCount + 1
+
+    if (
+      swapChainSupportDetails.capabilities.maxImageCount > 0 &&
+      imageCount > swapChainSupportDetails.capabilities.maxImageCount
+    ) {
+      imageCount = swapChainSupportDetails.capabilities.maxImageCount
     }
-  }
 
-  const createSwapChain = (
-    device: VkDevice,
-    surface: VkSurfaceKHR,
-    window: VulkanWindow,
-    details: SwapChainSupportDetails,
-    queueFamilyIndices: QueueFamilyIndices
-  ) => {
-    const surfaceFormat = chooseSwapSurfaceFormat(details.formats)
-    const presentMode = chooseSwapPresentMode((details.presentModes as unknown) as VkPresentModeKHR[])
-    const extent = chooseSwapExtent(details.capabilities, window)
-
-    let imageCount = details.capabilities.minImageCount + 1
-
-    if (details.capabilities.maxImageCount > 0 && imageCount > details.capabilities.maxImageCount) {
-      imageCount = details.capabilities.maxImageCount
-    }
+    // TODO: don't stop rendering when recreating the swapchain
+    // const oldSwapchain = swapChain ?? null
+    // TODO: don't forget to destroy the old chain as soon as it is done rendering
+    // take a look at https://github.com/maierfelix/nvk-examples/blob/2df94966360aa66d320d77d6ff3c56142ec2c9c5/cube/index.mjs
 
     const swapChainCreatInfo = new VkSwapchainCreateInfoKHR({
       surface,
       minImageCount: imageCount,
       imageFormat: surfaceFormat.format,
       imageColorSpace: surfaceFormat.colorSpace,
-      imageExtent: extent,
+      imageExtent: swapChainImageExtent,
       imageArrayLayers: 1,
       imageUsage: VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+      // oldSwapchain,
     })
 
     if (queueFamilyIndices.graphicsFamily != queueFamilyIndices.presentFamily) {
@@ -498,40 +546,56 @@ const initVulkan = () => {
       swapChainCreatInfo.pQueueFamilyIndices = null
     }
 
-    swapChainCreatInfo.preTransform = details.capabilities.currentTransform
+    swapChainCreatInfo.preTransform = swapChainSupportDetails.capabilities.currentTransform
     swapChainCreatInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
     swapChainCreatInfo.presentMode = presentMode
     swapChainCreatInfo.clipped = true
     swapChainCreatInfo.oldSwapchain = null
 
-    const swapChain = new VkSwapchainKHR()
-    const result = vkCreateSwapchainKHR(device, swapChainCreatInfo, null, swapChain)
-    ASSERT_VK_RESULT(result, 'Unable to create a swap chain')
+    swapChain = new VkSwapchainKHR()
+    ASSERT_VK_RESULT(vkCreateSwapchainKHR(device, swapChainCreatInfo, null, swapChain), 'Unable to create a swap chain')
 
     const actualImagesCount = { $: 0 }
     vkGetSwapchainImagesKHR(device, swapChain, actualImagesCount, null)
-    const swapChainImages: VkImage[] = new Array(actualImagesCount.$).fill(0).map(() => new VkImage())
+    swapChainImages = new Array(actualImagesCount.$).fill(0).map(() => new VkImage())
     vkGetSwapchainImagesKHR(device, swapChain, actualImagesCount, swapChainImages)
-
-    return [
-      swapChain,
-      swapChainImages,
-      surfaceFormat.format,
-      extent,
-      () => {
-        vkDestroySwapchainKHR(device, swapChain, null)
-      },
-    ] as const
   }
 
-  const createImageViews = (device: VkDevice, swapChainImages: VkImage[], swapChainImageFormat: VkFormat) => {
-    const swapChainImageViews: VkImageView[] = new Array(swapChainImages.length).fill(0).map(() => new VkImageView())
+  const cleanupSwapChain = (): void => {
+    vkDeviceWaitIdle(device)
+
+    for (const framebuffer of swapChainFramebuffers) {
+      vkDestroyFramebuffer(device, framebuffer, null)
+    }
+    swapChainFramebuffers = []
+
+    vkFreeCommandBuffers(device, commandPool, commandBuffers.length, commandBuffers)
+    commandBuffers = []
+
+    vkDestroyPipeline(device, graphicsPipeline, null)
+    graphicsPipeline = VK_NULL_HANDLE as any
+    vkDestroyPipelineLayout(device, pipelineLayout, null)
+    pipelineLayout = VK_NULL_HANDLE as any
+    vkDestroyRenderPass(device, renderPass, null)
+    renderPass = VK_NULL_HANDLE as any
+
+    for (const imageView of swapChainImageViews) {
+      vkDestroyImageView(device, imageView, null)
+    }
+    swapChainImageViews = []
+
+    vkDestroySwapchainKHR(device, swapChain, null)
+    swapChain = VK_NULL_HANDLE as any
+  }
+
+  const createImageViews = (): void => {
+    swapChainImageViews = new Array(swapChainImages.length).fill(0).map(() => new VkImageView())
 
     for (let i = 0; i < swapChainImages.length; ++i) {
       const createInfo = new VkImageViewCreateInfo({
         image: swapChainImages[i],
         viewType: VK_IMAGE_VIEW_TYPE_2D,
-        format: swapChainImageFormat,
+        format: surfaceFormat.format,
         components: new VkComponentMapping({
           r: VK_COMPONENT_SWIZZLE_IDENTITY,
           g: VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -546,41 +610,16 @@ const initVulkan = () => {
           layerCount: 1,
         }),
       })
-      const result = vkCreateImageView(device, createInfo, null, swapChainImageViews[i])
-      ASSERT_VK_RESULT(result, `Unable to create an image view for swapchain image under index ${i}`)
+      ASSERT_VK_RESULT(
+        vkCreateImageView(device, createInfo, null, swapChainImageViews[i]),
+        `Unable to create an image view for swapchain image under index ${i}`
+      )
     }
-
-    return [
-      swapChainImageViews,
-      () => {
-        for (const imageView of swapChainImageViews) {
-          vkDestroyImageView(device, imageView, null)
-        }
-      },
-    ] as const
   }
 
-  const createShaderModule = (shaderName: string, bytecode: Uint8Array) => {
-    const createInfo = new VkShaderModuleCreateInfo({
-      codeSize: bytecode.byteLength,
-      pCode: bytecode,
-    })
-
-    const shaderModule = new VkShaderModule()
-    const result = vkCreateShaderModule(device, createInfo, null, shaderModule)
-    ASSERT_VK_RESULT(result, `Failed to compile shader: ${shaderName}`)
-
-    return [
-      shaderModule,
-      () => {
-        vkDestroyShaderModule(device, shaderModule, null)
-      },
-    ] as const
-  }
-
-  const createRenderPass = (device: VkDevice, swapChainImageFormat: VkFormat) => {
+  const createRenderPass = (): void => {
     const colorAttachment = new VkAttachmentDescription({
-      format: swapChainImageFormat,
+      format: surfaceFormat.format,
       samples: VK_SAMPLE_COUNT_1_BIT,
       loadOp: VK_ATTACHMENT_LOAD_OP_CLEAR,
       storeOp: VK_ATTACHMENT_STORE_OP_STORE,
@@ -611,7 +650,7 @@ const initVulkan = () => {
       dstAccessMask: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
     })
 
-    const renderPass = new VkRenderPass()
+    renderPass = new VkRenderPass()
     const renderPassCreateInfo = new VkRenderPassCreateInfo({
       attachmentCount: 1,
       pAttachments: [colorAttachment],
@@ -620,18 +659,13 @@ const initVulkan = () => {
       dependencyCount: 1,
       pDependencies: [dependency],
     })
-    const result = vkCreateRenderPass(device, renderPassCreateInfo, null, renderPass)
-    ASSERT_VK_RESULT(result, 'Unable to create a render pass!')
-
-    return [
-      renderPass,
-      () => {
-        vkDestroyRenderPass(device, renderPass, null)
-      },
-    ] as const
+    ASSERT_VK_RESULT(
+      vkCreateRenderPass(device, renderPassCreateInfo, null, renderPass),
+      'Unable to create a render pass!'
+    )
   }
 
-  const createGraphicsPipeline = (device: VkDevice, renderPass: VkRenderPass, swapChainExtent: VkExtent2D) => {
+  const createGraphicsPipeline = (): void => {
     const vertShader = GLSL.toSPIRVSync({
       source: fs.readFileSync(path.resolve(__dirname, 'shaders/triangle.vert')),
       extension: 'vert',
@@ -649,8 +683,8 @@ const initVulkan = () => {
       throw fragShader.error
     }
 
-    const [vertShaderModule, destroyVertShaderModule] = createShaderModule('triangle.vert', vertShader.output)
-    const [fragShaderModule, destroyFragShaderModule] = createShaderModule('triangle.frag', fragShader.output)
+    const [vertShaderModule, destroyVertShaderModule] = createShaderModule(device, 'triangle.vert', vertShader.output)
+    const [fragShaderModule, destroyFragShaderModule] = createShaderModule(device, 'triangle.frag', fragShader.output)
 
     const vertShaderStageInfo = new VkPipelineShaderStageCreateInfo({
       stage: VK_SHADER_STAGE_VERTEX_BIT,
@@ -681,8 +715,8 @@ const initVulkan = () => {
     const viewport = new VkViewport({
       x: 0.0,
       y: 0.0,
-      width: swapChainExtent.width,
-      height: swapChainExtent.height,
+      width: swapChainImageExtent.width,
+      height: swapChainImageExtent.height,
       minDepth: 0.0,
       maxDepth: 1.0,
     })
@@ -692,7 +726,7 @@ const initVulkan = () => {
         x: 0,
         y: 0,
       }),
-      extent: swapChainExtent,
+      extent: swapChainImageExtent,
     })
 
     const viewportState = new VkPipelineViewportStateCreateInfo({
@@ -756,7 +790,7 @@ const initVulkan = () => {
       pDynamicStates: dynamicStates,
     })
 
-    const pipelineLayout = new VkPipelineLayout()
+    pipelineLayout = new VkPipelineLayout()
 
     const pipelineLayoutCreateInfo = new VkPipelineLayoutCreateInfo({
       setLayoutCount: 0,
@@ -764,8 +798,10 @@ const initVulkan = () => {
       pushConstantRangeCount: 0,
       pPushConstantRanges: null,
     })
-    const result = vkCreatePipelineLayout(device, pipelineLayoutCreateInfo, null, pipelineLayout)
-    ASSERT_VK_RESULT(result, 'Unable to create pipeline layout!')
+    ASSERT_VK_RESULT(
+      vkCreatePipelineLayout(device, pipelineLayoutCreateInfo, null, pipelineLayout),
+      'Unable to create pipeline layout!'
+    )
 
     const pipelineCreateInfo = new VkGraphicsPipelineCreateInfo({
       stageCount: 2,
@@ -789,90 +825,57 @@ const initVulkan = () => {
       basePipelineIndex: -1,
     })
 
-    const graphicsPipeline = new VkPipeline()
-    const graphicsPipelineResult = vkCreateGraphicsPipelines(device, null, 1, [pipelineCreateInfo], null, [
-      graphicsPipeline,
-    ])
-    ASSERT_VK_RESULT(graphicsPipelineResult, 'Unable to create a graphics pipeline!')
+    graphicsPipeline = new VkPipeline()
+    ASSERT_VK_RESULT(
+      vkCreateGraphicsPipelines(device, null, 1, [pipelineCreateInfo], null, [graphicsPipeline]),
+      'Unable to create a graphics pipeline!'
+    )
 
     destroyVertShaderModule()
     destroyFragShaderModule()
-
-    return [
-      graphicsPipeline,
-      pipelineLayout,
-      () => {
-        vkDestroyPipeline(device, graphicsPipeline, null)
-        vkDestroyPipelineLayout(device, pipelineLayout, null)
-      },
-    ] as const
   }
 
-  const createFramebuffers = (
-    device: VkDevice,
-    renderPass: VkRenderPass,
-    swapChainImageViews: VkImageView[],
-    swapChainExtent: VkExtent2D
-  ) => {
-    const swapChainFramebuffers = new Array(swapChainImageViews.length).fill(0).map(() => new VkFramebuffer())
+  const createFramebuffers = (): void => {
+    swapChainFramebuffers = new Array(swapChainImageViews.length).fill(0).map(() => new VkFramebuffer())
 
     for (let i = 0; i < swapChainImageViews.length; ++i) {
       const framebufferInfo = new VkFramebufferCreateInfo({
         renderPass: renderPass,
         attachmentCount: 1,
         pAttachments: [swapChainImageViews[i]],
-        width: swapChainExtent.width,
-        height: swapChainExtent.height,
+        width: swapChainImageExtent.width,
+        height: swapChainImageExtent.height,
         layers: 1,
       })
 
-      const result = vkCreateFramebuffer(device, framebufferInfo, null, swapChainFramebuffers[i])
-      ASSERT_VK_RESULT(result, `Unable to create a swapchain framebuffer at index ${i}`)
+      ASSERT_VK_RESULT(
+        vkCreateFramebuffer(device, framebufferInfo, null, swapChainFramebuffers[i]),
+        `Unable to create a swapchain framebuffer at index ${i}`
+      )
     }
-
-    return [
-      swapChainFramebuffers,
-      () => {
-        for (const framebuffer of swapChainFramebuffers) {
-          vkDestroyFramebuffer(device, framebuffer, null)
-        }
-      },
-    ] as const
   }
 
-  const createCommandPool = (device: VkDevice, queueFamilyIndices: QueueFamilyIndices) => {
+  const createCommandPool = (): void => {
     const poolCreateInfo = new VkCommandPoolCreateInfo({
       queueFamilyIndex: queueFamilyIndices.graphicsFamily!,
       flags: 0,
     })
-    const commandPool = new VkCommandPool()
-    const result = vkCreateCommandPool(device, poolCreateInfo, null, commandPool)
-    ASSERT_VK_RESULT(result, 'Unable to create graphics command pool')
-
-    return [
-      commandPool,
-      () => {
-        vkDestroyCommandPool(device, commandPool, null)
-      },
-    ] as const
+    commandPool = new VkCommandPool()
+    ASSERT_VK_RESULT(
+      vkCreateCommandPool(device, poolCreateInfo, null, commandPool),
+      'Unable to create graphics command pool'
+    )
   }
 
-  const crateCommandBuffers = (
-    renderPass: VkRenderPass,
-    swapChainFramebuffers: VkFramebuffer[],
-    commandPool: VkCommandPool,
-    swapChainExtent: VkExtent2D,
-    graphicsPipeline: VkPipeline
-  ) => {
-    const commandBuffers = new Array(swapChainFramebuffers.length).fill(0).map(() => new VkCommandBuffer())
+  const createCommandBuffers = () => {
+    commandBuffers = new Array(swapChainFramebuffers.length).fill(0).map(() => new VkCommandBuffer())
 
     const allocInfo = new VkCommandBufferAllocateInfo({
       commandPool: commandPool,
       level: VK_COMMAND_BUFFER_LEVEL_PRIMARY,
       commandBufferCount: commandBuffers.length,
     })
-    const result = vkAllocateCommandBuffers(device, allocInfo, commandBuffers)
-    ASSERT_VK_RESULT(result, 'Unable to allocate command buffers!')
+    ASSERT_VK_RESULT(vkAllocateCommandBuffers(device, allocInfo, commandBuffers), 'Unable to allocate command buffers!')
 
     for (let i = 0; i < commandBuffers.length; ++i) {
       const beginInfo = new VkCommandBufferBeginInfo({
@@ -880,8 +883,10 @@ const initVulkan = () => {
         pInheritanceInfo: null,
       })
 
-      const result = vkBeginCommandBuffer(commandBuffers[i], beginInfo)
-      ASSERT_VK_RESULT(result, `Unable to begin recording a command buffer under index ${i}`)
+      ASSERT_VK_RESULT(
+        vkBeginCommandBuffer(commandBuffers[i], beginInfo),
+        `Unable to begin recording a command buffer under index ${i}`
+      )
 
       const clearColor = new VkClearValue({
         color: new VkClearColorValue({ float32: [0.0, 0.0, 0.0, 0.0] }),
@@ -891,7 +896,7 @@ const initVulkan = () => {
         framebuffer: swapChainFramebuffers[i],
         renderArea: new VkRect2D({
           offset: new VkOffset2D({ x: 0, y: 0 }),
-          extent: swapChainExtent,
+          extent: swapChainImageExtent,
         }),
         clearValueCount: 1,
         pClearValues: [clearColor],
@@ -905,22 +910,19 @@ const initVulkan = () => {
 
       vkCmdEndRenderPass(commandBuffers[i])
 
-      const endResult = vkEndCommandBuffer(commandBuffers[i])
-      ASSERT_VK_RESULT(endResult, `Unable to record command buffer at index ${i}`)
+      ASSERT_VK_RESULT(vkEndCommandBuffer(commandBuffers[i]), `Unable to record command buffer at index ${i}`)
     }
-
-    return commandBuffers
   }
 
-  const createSyncObjects = (device: VkDevice, swapChainImages: VkImage[]) => {
+  const createSyncObjects = (): void => {
     const semaphoreCreateInfo = new VkSemaphoreCreateInfo()
-    const imageAvailableSemaphores = new Array(MAX_FRAMES_IN_FLIGHT).fill(0).map(() => new VkSemaphore())
-    const rendererFinishedSemaphores = new Array(MAX_FRAMES_IN_FLIGHT).fill(0).map(() => new VkSemaphore())
+    imageAvailableSemaphores = new Array(MAX_FRAMES_IN_FLIGHT).fill(0).map(() => new VkSemaphore())
+    rendererFinishedSemaphores = new Array(MAX_FRAMES_IN_FLIGHT).fill(0).map(() => new VkSemaphore())
     const fenceCreateInfo = new VkFenceCreateInfo({
       flags: VK_FENCE_CREATE_SIGNALED_BIT,
     })
-    const inFlightFences = new Array(MAX_FRAMES_IN_FLIGHT).fill(0).map(() => new VkFence())
-    const imagesInFlight: (VkFence | null)[] = new Array(swapChainImages.length).fill(0).map(() => null)
+    inFlightFences = new Array(MAX_FRAMES_IN_FLIGHT).fill(0).map(() => new VkFence())
+    imagesInFlight = new Array(swapChainImages.length).fill(0).map(() => null)
 
     for (let i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
       ASSERT_VK_RESULT(
@@ -936,41 +938,28 @@ const initVulkan = () => {
         `Failed to create inFlightFences[${i}]!`
       )
     }
+  }
 
-    return [
-      imageAvailableSemaphores,
-      rendererFinishedSemaphores,
-      inFlightFences,
-      imagesInFlight,
-      () => {
-        rendererFinishedSemaphores.forEach((semaphore) => {
-          vkDestroySemaphore(device, semaphore, null)
-        })
-        imageAvailableSemaphores.forEach((semaphore) => {
-          vkDestroySemaphore(device, semaphore, null)
-        })
-        inFlightFences.forEach((fence) => {
-          vkDestroyFence(device, fence, null)
-        })
-      },
-    ] as const
+  const recreateSwapChain = () => {
+    while (window.width === 0 || window.height === 0) {
+      window.pollEvents()
+    }
+
+    cleanupSwapChain()
+    createSwapChain()
+    createImageViews()
+    createRenderPass()
+    createGraphicsPipeline()
+    createFramebuffers()
+    createCommandBuffers()
   }
 
   let currentFrame = 0
-  const drawFrame = (
-    device: VkDevice,
-    swapChain: VkSwapchainKHR,
-    commandBuffers: VkCommandBuffer[],
-    graphicsQueue: VkQueue,
-    presentQueue: VkQueue,
-    imageAvailableSemaphores: VkSemaphore[],
-    rendererFinishedSemaphores: VkSemaphore[],
-    inFlightFences: VkFence[]
-  ) => {
+  const drawFrame = () => {
     vkWaitForFences(device, 1, [inFlightFences[currentFrame]], true, Number.MAX_SAFE_INTEGER)
 
     const imageIndex = { $: 0 }
-    vkAcquireNextImageKHR(
+    let result = vkAcquireNextImageKHR(
       device,
       swapChain,
       Number.MAX_SAFE_INTEGER,
@@ -978,6 +967,12 @@ const initVulkan = () => {
       null,
       imageIndex
     )
+    if (result === VK_ERROR_OUT_OF_DATE_KHR) {
+      recreateSwapChain()
+      return
+    } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+      ASSERT_VK_RESULT(result, 'Unable to acquire swap chain image!')
+    }
 
     const fence = imagesInFlight[imageIndex.$]
     if (fence != null) {
@@ -997,8 +992,10 @@ const initVulkan = () => {
     })
 
     vkResetFences(device, 1, [inFlightFences[currentFrame]])
-    const result = vkQueueSubmit(graphicsQueue, 1, [submitInfo], inFlightFences[currentFrame])
-    ASSERT_VK_RESULT(result, 'Unable to submit draw command buffer!')
+    ASSERT_VK_RESULT(
+      vkQueueSubmit(graphicsQueue, 1, [submitInfo], inFlightFences[currentFrame]),
+      'Unable to submit draw command buffer!'
+    )
 
     const presentInfo = new VkPresentInfoKHR({
       waitSemaphoreCount: 1,
@@ -1009,123 +1006,78 @@ const initVulkan = () => {
       pResults: null,
     })
 
-    const presentResult = vkQueuePresentKHR(presentQueue, presentInfo)
-    ASSERT_VK_RESULT(presentResult, 'Unable to present queue!')
+    result = vkQueuePresentKHR(presentQueue, presentInfo)
+    if (result === VK_ERROR_OUT_OF_DATE_KHR || result === VK_SUBOPTIMAL_KHR || framebufferResized) {
+      framebufferResized = false
+      recreateSwapChain()
+    } else {
+      ASSERT_VK_RESULT(result, 'Unable to present swap chain image!')
+    }
 
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT
   }
 
-  const deviceExtensions = ([VK_KHR_SWAPCHAIN_EXTENSION_NAME] as unknown) as string[]
-
-  const window = new VulkanWindow({
-    width: 1920 / 2,
-    height: 1080 / 2,
-    title: 'typescript-example',
-  })
-
-  const [instance, enabledLayers, destroyInstance] = createInstance(window)
-  const [surface, destroySurface] = createSurface(instance, window)
-  const [physicalDevice, deviceProperties, deviceFeatures, swapChainDetails] = pickPhysicalDevice(
-    instance,
-    surface,
-    deviceExtensions
-  )!
-  const queueFamilyIndices = findQueueFamilies(physicalDevice, surface)
-  const [device, graphicsQueue, presentQueue, destroyDevice] = createLogicalDevice(
-    physicalDevice,
-    queueFamilyIndices,
-    deviceFeatures,
-    enabledLayers,
-    deviceExtensions
-  )
-  const [swapChain, swapChainImages, swapChainImageFormat, swapChainExtent, destroySwapChain] = createSwapChain(
-    device,
-    surface,
-    window,
-    swapChainDetails,
-    queueFamilyIndices
-  )
-  const [swapChainImageViews, destroySwapChainImageViews] = createImageViews(
-    device,
-    swapChainImages,
-    swapChainImageFormat
-  )
-  const [renderPass, destroyRenderPass] = createRenderPass(device, swapChainImageFormat)
-  const [graphicsPipeline, pipelineLayout, destroyGraphicsPipelineLayout] = createGraphicsPipeline(
-    device,
-    renderPass,
-    swapChainExtent
-  )
-  const [swapChainFramebuffers, destroyFramebuffers] = createFramebuffers(
-    device,
-    renderPass,
-    swapChainImageViews,
-    swapChainExtent
-  )
-  const [commandPool, destroyCommandPool] = createCommandPool(device, queueFamilyIndices)
-  const commandBuffers = crateCommandBuffers(
-    renderPass,
-    swapChainFramebuffers,
-    commandPool,
-    swapChainExtent,
-    graphicsPipeline
-  )
-  const [
-    imageAvailableSemaphores,
-    rendererFinishedSemaphores,
-    inFlightFences,
-    imagesInFlight,
-    destroySemaphores,
-  ] = createSyncObjects(device, swapChainImages)
+  createWindow()
+  createInstance()
+  createSurface()
+  pickPhysicalDevice()
+  findQueueFamilies()
+  createLogicalDevice()
+  createSwapChain()
+  createImageViews()
+  createRenderPass()
+  createGraphicsPipeline()
+  createFramebuffers()
+  createCommandPool()
+  createCommandBuffers()
+  createSyncObjects()
 
   const cleanup = () => {
-    destroySemaphores()
-    destroyCommandPool()
-    destroyFramebuffers()
-    destroyGraphicsPipelineLayout()
-    destroyRenderPass()
-    destroySwapChainImageViews()
-    destroySwapChain()
-    destroyDevice()
-    destroySurface()
-    destroyInstance()
+    cleanupSwapChain()
+
+    for (let i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+      vkDestroySemaphore(device, rendererFinishedSemaphores[i], null)
+      vkDestroySemaphore(device, imageAvailableSemaphores[i], null)
+      vkDestroyFence(device, inFlightFences[i], null)
+    }
+    rendererFinishedSemaphores = []
+    imageAvailableSemaphores = []
+    inFlightFences = []
+
+    vkDestroyCommandPool(device, commandPool, null)
+    commandPool = null!
+    vkDestroyDevice(device, null)
+    device = null!
+    vkDestroySurfaceKHR(instance, surface, null)
+    surface = null!
+    vkDestroyInstance(instance, null)
+    instance = null!
   }
 
-  let lastFrameTime = performance.now()
-
-  return {
-    loop: () => {
-      if (!window.shouldClose()) {
-        const now = performance.now()
-        const delta = (now - lastFrameTime) | 0
-        drawFrame(
-          device,
-          swapChain,
-          commandBuffers,
-          graphicsQueue,
-          presentQueue,
-          imageAvailableSemaphores,
-          rendererFinishedSemaphores,
-          inFlightFences
-        )
-        window.title = `typescript-example - ${delta}ms`
-        lastFrameTime = now
-        window.pollEvents()
-      } else {
-        cleanup()
-        setTimeout(() => {
-          window.close()
-          process.exit(0)
-        }, 100)
-      }
-    },
+  window!.onclose = () => {
+    cleanup()
   }
+
+  let lastFrame = performance.now()
+
+  const loop = () => {
+    if (!window.shouldClose()) {
+      const now = performance.now()
+      const delta = (now - lastFrame) | 0
+      drawFrame()
+      window.pollEvents()
+      window.title = `${windowTitle} - ${delta}ms`
+      lastFrame = now
+
+      setTimeout(loop, 0)
+    }
+  }
+
+  return { loop }
 }
 
 export const run = () => {
   const { loop } = initVulkan()
 
-  setInterval(() => {
-    loop()
-  }, 1e3 / 60)
+  loop()
 }
