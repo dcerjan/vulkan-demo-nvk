@@ -13,6 +13,7 @@ import {
   VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
   VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
   VK_COLORSPACE_SRGB_NONLINEAR_KHR,
   VK_COLOR_COMPONENT_A_BIT,
@@ -24,6 +25,7 @@ import {
   VK_COMPONENT_SWIZZLE_IDENTITY,
   VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
   VK_CULL_MODE_BACK_BIT,
+  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
   VK_DYNAMIC_STATE_BLEND_CONSTANTS,
   VK_DYNAMIC_STATE_LINE_WIDTH,
   VK_DYNAMIC_STATE_VIEWPORT,
@@ -81,6 +83,9 @@ import {
   VkCommandPool,
   VkCommandPoolCreateInfo,
   VkComponentMapping,
+  VkDescriptorSetLayout,
+  VkDescriptorSetLayoutBinding,
+  VkDescriptorSetLayoutCreateInfo,
   VkDevice,
   VkDeviceCreateInfo,
   VkDeviceMemory,
@@ -151,11 +156,11 @@ import {
   vkCmdBindPipeline,
   vkCmdBindVertexBuffers,
   vkCmdCopyBuffer,
-  vkCmdDraw,
   vkCmdDrawIndexed,
   vkCmdEndRenderPass,
   vkCreateBuffer,
   vkCreateCommandPool,
+  vkCreateDescriptorSetLayout,
   vkCreateDevice,
   vkCreateFence,
   vkCreateFramebuffer,
@@ -169,6 +174,7 @@ import {
   vkCreateSwapchainKHR,
   vkDestroyBuffer,
   vkDestroyCommandPool,
+  vkDestroyDescriptorSetLayout,
   vkDestroyDevice,
   vkDestroyFence,
   vkDestroyFramebuffer,
@@ -212,6 +218,7 @@ import { GLSL } from 'nvk-essentials'
 import SegfaultHandler from 'segfault-handler'
 import { Vertex } from './Vertex'
 import fs from 'fs'
+import { mat4 } from 'gl-matrix'
 import path from 'path'
 
 SegfaultHandler.registerHandler('crash.log')
@@ -235,6 +242,35 @@ class QueueFamilyIndices {
 
   public isComplete() {
     return this.graphicsFamily != null && this.presentFamily != null && this.transferFamily != null
+  }
+}
+
+class UniformBufferObject {
+  private ubo: Float32Array
+  constructor(model: mat4, view: mat4, proj: mat4) {
+    this.ubo = new Float32Array([...model, ...view, ...proj])
+  }
+
+  set model(matrix: mat4) {
+    for (let i = 0; i < matrix.length; ++i) {
+      this.ubo[i] = matrix[i]
+    }
+  }
+
+  set view(matrix: mat4) {
+    for (let i = 0; i < matrix.length; ++i) {
+      this.ubo[i + 4 * 16] = matrix[i]
+    }
+  }
+
+  set proj(matrix: mat4) {
+    for (let i = 0; i < matrix.length; ++i) {
+      this.ubo[i + 2 * 4 * 16] = matrix[i]
+    }
+  }
+
+  get data(): Readonly<Float32Array> {
+    return this.ubo
   }
 }
 
@@ -362,6 +398,165 @@ const createShaderModule = (device: VkDevice, shaderName: string, bytecode: Uint
   ] as const
 }
 
+const copyBuffer = (
+  device: VkDevice,
+  transferCommandPool: VkCommandPool,
+  transferQueue: VkQueue,
+  srcBuffer: VkBuffer,
+  dstBuffer: VkBuffer,
+  size: number
+) => {
+  const allocInfo = new VkCommandBufferAllocateInfo({
+    level: VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+    commandPool: transferCommandPool,
+    commandBufferCount: 1,
+  })
+
+  const transferCommandBuffer = new VkCommandBuffer()
+  vkAllocateCommandBuffers(device, allocInfo, [transferCommandBuffer])
+
+  const beginInfo = new VkCommandBufferBeginInfo({
+    flags: VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+  })
+  vkBeginCommandBuffer(transferCommandBuffer, beginInfo)
+
+  const copyRegion = new VkBufferCopy({
+    srcOffset: 0,
+    dstOffset: 0,
+    size,
+  })
+
+  vkCmdCopyBuffer(transferCommandBuffer, srcBuffer, dstBuffer, 1, [copyRegion])
+
+  vkEndCommandBuffer(transferCommandBuffer)
+
+  const submitInfo = new VkSubmitInfo({
+    commandBufferCount: 1,
+    pCommandBuffers: [transferCommandBuffer],
+  })
+
+  vkQueueSubmit(transferQueue, 1, [submitInfo], null)
+  vkQueueWaitIdle(transferQueue)
+
+  vkFreeCommandBuffers(device, transferCommandPool, 1, [transferCommandBuffer])
+}
+
+const createBuffer = (
+  physicalDevice: VkPhysicalDevice,
+  device: VkDevice,
+  queueFamilyIndices: QueueFamilyIndices,
+  size: number,
+  usage: VkBufferUsageFlagBits,
+  properties: VkMemoryPropertyFlagBits
+) => {
+  const buffer: VkBuffer = new VkBuffer()
+  const bufferMemory: VkDeviceMemory = new VkDeviceMemory()
+
+  const bufferInfo = new VkBufferCreateInfo({
+    size,
+    usage,
+    sharingMode: VK_SHARING_MODE_CONCURRENT,
+    queueFamilyIndexCount: 2,
+    pQueueFamilyIndices: new Uint32Array([queueFamilyIndices.transferFamily!, queueFamilyIndices.graphicsFamily!]),
+  })
+  ASSERT_VK_RESULT(vkCreateBuffer(device, bufferInfo, null, buffer), 'Unable to create vertex buffer!')
+
+  const memRequirements = new VkMemoryRequirements()
+  vkGetBufferMemoryRequirements(device, buffer, memRequirements)
+
+  const allocInfo = new VkMemoryAllocateInfo({
+    allocationSize: memRequirements.size,
+    memoryTypeIndex: findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties),
+  })
+
+  ASSERT_VK_RESULT(vkAllocateMemory(device, allocInfo, null, bufferMemory), 'Unable to allocate vertex buffer memory!')
+
+  vkBindBufferMemory(device, buffer, bufferMemory, 0)
+
+  return [buffer, bufferMemory] as const
+}
+
+const createVertexBuffer = (
+  physicalDevice: VkPhysicalDevice,
+  device: VkDevice,
+  queueFamilyIndices: QueueFamilyIndices,
+  transferCommandPool: VkCommandPool,
+  transferQueue: VkQueue,
+  vertices: Vertex[]
+) => {
+  const buffer = Vertex.buffer(vertices)
+
+  const [stagingBuffer, stagingBufferMemory] = createBuffer(
+    physicalDevice,
+    device,
+    queueFamilyIndices,
+    buffer.byteLength,
+    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+  )
+
+  const dataPtr = { $: 0n }
+  vkMapMemory(device, stagingBufferMemory, 0, buffer.byteLength, 0, dataPtr)
+  memoryCopy(dataPtr.$, buffer.buffer, buffer.byteLength)
+  vkUnmapMemory(device, stagingBufferMemory)
+
+  const [vertexBuffer, vertexBufferMemory] = createBuffer(
+    physicalDevice,
+    device,
+    queueFamilyIndices,
+    buffer.byteLength,
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+  )
+
+  copyBuffer(device, transferCommandPool, transferQueue, stagingBuffer, vertexBuffer, buffer.byteLength)
+
+  vkDestroyBuffer(device, stagingBuffer, null)
+  vkFreeMemory(device, stagingBufferMemory, null)
+
+  return [vertexBuffer, vertexBufferMemory] as const
+}
+
+const createIndexBuffer = (
+  physicalDevice: VkPhysicalDevice,
+  device: VkDevice,
+  queueFamilyIndices: QueueFamilyIndices,
+  transferCommandPool: VkCommandPool,
+  transferQueue: VkQueue,
+  indices: number[]
+) => {
+  const buffer = new Uint16Array(indices)
+  const [stagingBuffer, stagingBufferMemory] = createBuffer(
+    physicalDevice,
+    device,
+    queueFamilyIndices,
+    buffer.byteLength,
+    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+  )
+
+  const dataPtr = { $: 0n }
+  vkMapMemory(device, stagingBufferMemory, 0, buffer.byteLength, 0, dataPtr)
+  memoryCopy(dataPtr.$, buffer.buffer, buffer.byteLength)
+  vkUnmapMemory(device, stagingBufferMemory)
+
+  const [indexBuffer, indexBufferMemory] = createBuffer(
+    physicalDevice,
+    device,
+    queueFamilyIndices,
+    buffer.byteLength,
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+  )
+
+  copyBuffer(device, transferCommandPool, transferQueue, stagingBuffer, indexBuffer, buffer.byteLength)
+
+  vkDestroyBuffer(device, stagingBuffer, null)
+  vkFreeMemory(device, stagingBufferMemory, null)
+
+  return [indexBuffer, indexBufferMemory] as const
+}
+
 const initVulkan = (
   windowSize: { x: number; y: number } = { x: 1920, y: 1080 },
   windowTitle: string = 'typescript-example',
@@ -388,6 +583,7 @@ const initVulkan = (
   let swapChainImageExtent: VkExtent2D
   let swapChainImageViews: VkImageView[]
   let renderPass: VkRenderPass
+  let descriptorSetLayout: VkDescriptorSetLayout
   let pipelineLayout: VkPipelineLayout
   let graphicsPipeline: VkPipeline
   let swapChainFramebuffers: VkFramebuffer[]
@@ -403,6 +599,8 @@ const initVulkan = (
   let vertexBufferMemory: VkDeviceMemory
   let indexBuffer: VkBuffer
   let indexBufferMemory: VkDeviceMemory
+  let uniformBuffers: VkBuffer[]
+  let uniformBuffersMemory: VkDeviceMemory[]
 
   const vertices = [
     new Vertex([-0.5, -0.5], [1.0, 1.0, 1.0]),
@@ -410,8 +608,13 @@ const initVulkan = (
     new Vertex([0.5, 0.5], [0.0, 0.0, 1.0]),
     new Vertex([-0.5, 0.5], [1.0, 0.0, 0.0]),
   ]
+  const indices = [0, 1, 2, 2, 3, 0]
 
-  const indices = new Uint16Array([0, 1, 2, 2, 3, 0])
+  const uniforms = new UniformBufferObject(
+    [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+    [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+    [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+  )
 
   const findQueueFamilies = (): void => {
     queueFamilyIndices = new QueueFamilyIndices()
@@ -665,6 +868,13 @@ const initVulkan = (
 
     vkDestroySwapchainKHR(device, swapChain, null)
     swapChain = VK_NULL_HANDLE as any
+
+    for (let i = 0; i < uniformBuffers.length; ++i) {
+      vkDestroyBuffer(device, uniformBuffers[i], null)
+      vkFreeMemory(device, uniformBuffersMemory[i], null)
+    }
+    uniformBuffers = []
+    uniformBuffersMemory = []
   }
 
   const createImageViews = (): void => {
@@ -741,6 +951,26 @@ const initVulkan = (
     ASSERT_VK_RESULT(
       vkCreateRenderPass(device, renderPassCreateInfo, null, renderPass),
       'Unable to create a render pass!'
+    )
+  }
+
+  const createDescriptorSetLayout = (): void => {
+    const uboLayoutBinding = new VkDescriptorSetLayoutBinding({
+      binding: 0,
+      descriptorType: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      descriptorCount: 1,
+      stageFlags: VK_SHADER_STAGE_VERTEX_BIT,
+      pImmutableSamplers: null,
+    })
+
+    const layoutInfo = new VkDescriptorSetLayoutCreateInfo({
+      bindingCount: 1,
+      pBindings: [uboLayoutBinding],
+    })
+    descriptorSetLayout = new VkDescriptorSetLayout()
+    ASSERT_VK_RESULT(
+      vkCreateDescriptorSetLayout(device, layoutInfo, null, descriptorSetLayout),
+      'Unable do create descriptor set layout!'
     )
   }
 
@@ -875,8 +1105,8 @@ const initVulkan = (
     pipelineLayout = new VkPipelineLayout()
 
     const pipelineLayoutCreateInfo = new VkPipelineLayoutCreateInfo({
-      setLayoutCount: 0,
-      pSetLayouts: null,
+      setLayoutCount: 1,
+      pSetLayouts: [descriptorSetLayout],
       pushConstantRangeCount: 0,
       pPushConstantRanges: null,
     })
@@ -959,141 +1189,45 @@ const initVulkan = (
     )
   }
 
-  const createVertexBuffer = (): void => {
-    const buffer = Vertex.buffer(vertices)
-
-    const stagingBuffer = new VkBuffer()
-    const stagingBufferMemory = new VkDeviceMemory()
-    createBuffer(
-      buffer.byteLength,
-      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-      stagingBuffer,
-      stagingBufferMemory
+  const createIndexedVertexBuffer = (): void => {
+    ;[vertexBuffer, vertexBufferMemory] = createVertexBuffer(
+      physicalDevice,
+      device,
+      queueFamilyIndices,
+      transferCommandPool,
+      transferQueue,
+      vertices
     )
-
-    const dataPtr = { $: 0n }
-    vkMapMemory(device, stagingBufferMemory, 0, buffer.byteLength, 0, dataPtr)
-    memoryCopy(dataPtr.$, buffer.buffer, buffer.byteLength)
-    vkUnmapMemory(device, stagingBufferMemory)
-
-    vertexBuffer = new VkBuffer()
-    vertexBufferMemory = new VkDeviceMemory()
-    createBuffer(
-      buffer.byteLength,
-      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-      vertexBuffer,
-      vertexBufferMemory
+    ;[indexBuffer, indexBufferMemory] = createIndexBuffer(
+      physicalDevice,
+      device,
+      queueFamilyIndices,
+      transferCommandPool,
+      transferQueue,
+      indices
     )
-
-    copyBuffer(stagingBuffer, vertexBuffer, buffer.byteLength)
-
-    vkDestroyBuffer(device, stagingBuffer, null)
-    vkFreeMemory(device, stagingBufferMemory, null)
   }
 
-  const createIndexBuffer = (): void => {
-    const stagingBuffer = new VkBuffer()
-    const stagingBufferMemory = new VkDeviceMemory()
-    createBuffer(
-      indices.byteLength,
-      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-      stagingBuffer,
-      stagingBufferMemory
-    )
+  const createUniformBuffers = (): void => {
+    const bufferSize = uniforms.data.byteLength
 
-    const dataPtr = { $: 0n }
-    vkMapMemory(device, stagingBufferMemory, 0, indices.byteLength, 0, dataPtr)
-    memoryCopy(dataPtr.$, indices.buffer, indices.byteLength)
-    vkUnmapMemory(device, stagingBufferMemory)
-
-    indexBuffer = new VkBuffer()
-    indexBufferMemory = new VkDeviceMemory()
-    createBuffer(
-      indices.byteLength,
-      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-      indexBuffer,
-      indexBufferMemory
-    )
-
-    copyBuffer(stagingBuffer, indexBuffer, indices.byteLength)
-
-    vkDestroyBuffer(device, stagingBuffer, null)
-    vkFreeMemory(device, stagingBufferMemory, null)
+    uniformBuffers = []
+    uniformBuffersMemory = []
+    for (let i = 0; i < swapChainImages.length; ++i) {
+      const [buffer, memory] = createBuffer(
+        physicalDevice,
+        device,
+        queueFamilyIndices,
+        bufferSize,
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+      )
+      uniformBuffers.push(buffer)
+      uniformBuffersMemory.push(memory)
+    }
   }
 
-  const copyBuffer = (srcBuffer: VkBuffer, dstBuffer: VkBuffer, size: number) => {
-    const allocInfo = new VkCommandBufferAllocateInfo({
-      level: VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-      commandPool: transferCommandPool,
-      commandBufferCount: 1,
-    })
-
-    const transferCommandBuffer = new VkCommandBuffer()
-    vkAllocateCommandBuffers(device, allocInfo, [transferCommandBuffer])
-
-    const beginInfo = new VkCommandBufferBeginInfo({
-      flags: VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    })
-    vkBeginCommandBuffer(transferCommandBuffer, beginInfo)
-
-    const copyRegion = new VkBufferCopy({
-      srcOffset: 0,
-      dstOffset: 0,
-      size,
-    })
-
-    vkCmdCopyBuffer(transferCommandBuffer, srcBuffer, dstBuffer, 1, [copyRegion])
-
-    vkEndCommandBuffer(transferCommandBuffer)
-
-    const submitInfo = new VkSubmitInfo({
-      commandBufferCount: 1,
-      pCommandBuffers: [transferCommandBuffer],
-    })
-
-    vkQueueSubmit(transferQueue, 1, [submitInfo], null)
-    vkQueueWaitIdle(transferQueue)
-
-    vkFreeCommandBuffers(device, transferCommandPool, 1, [transferCommandBuffer])
-  }
-
-  const createBuffer = (
-    size: number,
-    usage: VkBufferUsageFlagBits,
-    properties: VkMemoryPropertyFlagBits,
-    buffer: VkBuffer,
-    bufferMemory: VkDeviceMemory
-  ) => {
-    const bufferInfo = new VkBufferCreateInfo({
-      size,
-      usage,
-      sharingMode: VK_SHARING_MODE_CONCURRENT,
-      queueFamilyIndexCount: 2,
-      pQueueFamilyIndices: new Uint32Array([queueFamilyIndices.transferFamily!, queueFamilyIndices.graphicsFamily!]),
-    })
-    ASSERT_VK_RESULT(vkCreateBuffer(device, bufferInfo, null, buffer), 'Unable to create vertex buffer!')
-
-    const memRequirements = new VkMemoryRequirements()
-    vkGetBufferMemoryRequirements(device, buffer, memRequirements)
-
-    const allocInfo = new VkMemoryAllocateInfo({
-      allocationSize: memRequirements.size,
-      memoryTypeIndex: findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties),
-    })
-
-    ASSERT_VK_RESULT(
-      vkAllocateMemory(device, allocInfo, null, bufferMemory),
-      'Unable to allocate vertex buffer memory!'
-    )
-
-    vkBindBufferMemory(device, buffer, bufferMemory, 0)
-  }
-
-  const createCommandBuffers = () => {
+  const createCommandBuffers = (): void => {
     graphicsCommandBuffers = new Array(swapChainFramebuffers.length).fill(0).map(() => new VkCommandBuffer())
     const graphicsAllocInfo = new VkCommandBufferAllocateInfo({
       commandPool: graphicsCommandPool,
@@ -1174,7 +1308,7 @@ const initVulkan = (
     }
   }
 
-  const recreateSwapChain = () => {
+  const recreateSwapChain = (): void => {
     while (window.width === 0 || window.height === 0) {
       window.pollEvents()
     }
@@ -1185,7 +1319,21 @@ const initVulkan = (
     createRenderPass()
     createGraphicsPipeline()
     createFramebuffers()
+    createUniformBuffers()
     createCommandBuffers()
+  }
+
+  const updateUniformBuffer = (currentImage: number) => {
+    const angle = Math.sin(performance.now() * 0.001)
+
+    const ca = Math.cos(angle)
+    const sa = Math.sin(angle)
+    uniforms.model = [ca, sa, 0.0, 0.0, -sa, ca, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+    const dataPtr = { $: 0n }
+    vkMapMemory(device, uniformBuffersMemory[currentImage], 0, uniforms.data.byteLength, 0, dataPtr)
+    memoryCopy(dataPtr.$, uniforms.data.buffer, uniforms.data.byteLength)
+    vkUnmapMemory(device, uniformBuffersMemory[currentImage])
   }
 
   let currentFrame = 0
@@ -1213,6 +1361,8 @@ const initVulkan = (
       vkWaitForFences(device, 1, [fence], true, Number.MAX_SAFE_INTEGER)
     }
     imagesInFlight[imageIndex.$] = inFlightFences[currentFrame]
+
+    updateUniformBuffer(imageIndex.$)
 
     const waitStages = new Int32Array([VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT])
     const submitInfo = new VkSubmitInfo({
@@ -1260,16 +1410,19 @@ const initVulkan = (
   createSwapChain()
   createImageViews()
   createRenderPass()
+  createDescriptorSetLayout()
   createGraphicsPipeline()
   createFramebuffers()
   createCommandPools()
-  createVertexBuffer()
-  createIndexBuffer()
+  createIndexedVertexBuffer()
+  createUniformBuffers()
   createCommandBuffers()
   createSyncObjects()
 
   const cleanup = () => {
     cleanupSwapChain()
+
+    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, null)
 
     vkDestroyBuffer(device, indexBuffer, null)
     vkFreeMemory(device, indexBufferMemory, null)
