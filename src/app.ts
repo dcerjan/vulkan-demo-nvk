@@ -10,6 +10,7 @@ import {
   VK_BLEND_FACTOR_SRC_ALPHA,
   VK_BLEND_FACTOR_ZERO,
   VK_BLEND_OP_ADD,
+  VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
   VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -37,6 +38,7 @@ import {
   VK_IMAGE_LAYOUT_UNDEFINED,
   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
   VK_IMAGE_VIEW_TYPE_2D,
+  VK_INDEX_TYPE_UINT16,
   VK_KHR_SWAPCHAIN_EXTENSION_NAME,
   VK_LOGIC_OP_COPY,
   VK_MAKE_VERSION,
@@ -145,10 +147,12 @@ import {
   vkBeginCommandBuffer,
   vkBindBufferMemory,
   vkCmdBeginRenderPass,
+  vkCmdBindIndexBuffer,
   vkCmdBindPipeline,
   vkCmdBindVertexBuffers,
   vkCmdCopyBuffer,
   vkCmdDraw,
+  vkCmdDrawIndexed,
   vkCmdEndRenderPass,
   vkCreateBuffer,
   vkCreateCommandPool,
@@ -397,12 +401,17 @@ const initVulkan = (
   let framebufferResized = false
   let vertexBuffer: VkBuffer
   let vertexBufferMemory: VkDeviceMemory
+  let indexBuffer: VkBuffer
+  let indexBufferMemory: VkDeviceMemory
 
   const vertices = [
-    new Vertex([0.0, -0.5], [1.0, 1.0, 1.0]),
-    new Vertex([0.5, 0.5], [0.0, 1.0, 0.0]),
-    new Vertex([-0.5, 0.5], [0.0, 0.0, 1.0]),
+    new Vertex([-0.5, -0.5], [1.0, 1.0, 1.0]),
+    new Vertex([0.5, -0.5], [0.0, 1.0, 0.0]),
+    new Vertex([0.5, 0.5], [0.0, 0.0, 1.0]),
+    new Vertex([-0.5, 0.5], [1.0, 0.0, 0.0]),
   ]
+
+  const indices = new Uint16Array([0, 1, 2, 2, 3, 0])
 
   const findQueueFamilies = (): void => {
     queueFamilyIndices = new QueueFamilyIndices()
@@ -984,6 +993,38 @@ const initVulkan = (
     vkFreeMemory(device, stagingBufferMemory, null)
   }
 
+  const createIndexBuffer = (): void => {
+    const stagingBuffer = new VkBuffer()
+    const stagingBufferMemory = new VkDeviceMemory()
+    createBuffer(
+      indices.byteLength,
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+      stagingBuffer,
+      stagingBufferMemory
+    )
+
+    const dataPtr = { $: 0n }
+    vkMapMemory(device, stagingBufferMemory, 0, indices.byteLength, 0, dataPtr)
+    memoryCopy(dataPtr.$, indices.buffer, indices.byteLength)
+    vkUnmapMemory(device, stagingBufferMemory)
+
+    indexBuffer = new VkBuffer()
+    indexBufferMemory = new VkDeviceMemory()
+    createBuffer(
+      indices.byteLength,
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      indexBuffer,
+      indexBufferMemory
+    )
+
+    copyBuffer(stagingBuffer, indexBuffer, indices.byteLength)
+
+    vkDestroyBuffer(device, stagingBuffer, null)
+    vkFreeMemory(device, stagingBufferMemory, null)
+  }
+
   const copyBuffer = (srcBuffer: VkBuffer, dstBuffer: VkBuffer, size: number) => {
     const allocInfo = new VkCommandBufferAllocateInfo({
       level: VK_COMMAND_BUFFER_LEVEL_PRIMARY,
@@ -1096,7 +1137,10 @@ const initVulkan = (
       // TODO: report to repo nvk has broken typings for BigUint64Array
       vkCmdBindVertexBuffers(graphicsCommandBuffers[i], 0, 1, [vertexBuffer], new BigUint64Array([0n]) as any)
 
-      vkCmdDraw(graphicsCommandBuffers[i], vertices.length, 1, 0, 0)
+      vkCmdBindIndexBuffer(graphicsCommandBuffers[i], indexBuffer, 0n, VK_INDEX_TYPE_UINT16)
+
+      // vkCmdDraw(graphicsCommandBuffers[i], vertices.length, 1, 0, 0)
+      vkCmdDrawIndexed(graphicsCommandBuffers[i], indices.length, 1, 0, 0, 0)
 
       vkCmdEndRenderPass(graphicsCommandBuffers[i])
 
@@ -1220,11 +1264,15 @@ const initVulkan = (
   createFramebuffers()
   createCommandPools()
   createVertexBuffer()
+  createIndexBuffer()
   createCommandBuffers()
   createSyncObjects()
 
   const cleanup = () => {
     cleanupSwapChain()
+
+    vkDestroyBuffer(device, indexBuffer, null)
+    vkFreeMemory(device, indexBufferMemory, null)
 
     vkDestroyBuffer(device, vertexBuffer, null)
     vkFreeMemory(device, vertexBufferMemory, null)
