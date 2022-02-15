@@ -1,9 +1,9 @@
 import {
-  VkVertexInputAttributeDescription,
-  VkVertexInputBindingDescription,
   VK_FORMAT_R32G32B32_SFLOAT,
   VK_FORMAT_R32G32_SFLOAT,
   VK_VERTEX_INPUT_RATE_VERTEX,
+  VkVertexInputAttributeDescription,
+  VkVertexInputBindingDescription,
 } from 'nvk'
 import { vec2, vec3 } from 'gl-matrix'
 

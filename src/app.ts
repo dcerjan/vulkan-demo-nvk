@@ -1,207 +1,215 @@
-import fs from 'fs'
-import path from 'path'
+import { ASSERT_VK_RESULT, memoryCopy } from './utils'
 import {
+  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+  VK_ATTACHMENT_LOAD_OP_CLEAR,
+  VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+  VK_ATTACHMENT_STORE_OP_DONT_CARE,
+  VK_ATTACHMENT_STORE_OP_STORE,
+  VK_BLEND_FACTOR_ONE,
+  VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
+  VK_BLEND_FACTOR_SRC_ALPHA,
+  VK_BLEND_FACTOR_ZERO,
+  VK_BLEND_OP_ADD,
+  VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+  VK_COLORSPACE_SRGB_NONLINEAR_KHR,
+  VK_COLOR_COMPONENT_A_BIT,
+  VK_COLOR_COMPONENT_B_BIT,
+  VK_COLOR_COMPONENT_G_BIT,
+  VK_COLOR_COMPONENT_R_BIT,
+  VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+  VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+  VK_COMPONENT_SWIZZLE_IDENTITY,
+  VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+  VK_CULL_MODE_BACK_BIT,
+  VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+  VK_DYNAMIC_STATE_LINE_WIDTH,
+  VK_DYNAMIC_STATE_VIEWPORT,
+  VK_ERROR_OUT_OF_DATE_KHR,
+  VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+  VK_FENCE_CREATE_SIGNALED_BIT,
+  VK_FORMAT_B8G8R8A8_SRGB,
+  VK_FRONT_FACE_CLOCKWISE,
+  VK_IMAGE_ASPECT_COLOR_BIT,
+  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+  VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+  VK_IMAGE_LAYOUT_UNDEFINED,
+  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+  VK_IMAGE_VIEW_TYPE_2D,
+  VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+  VK_LOGIC_OP_COPY,
+  VK_MAKE_VERSION,
+  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+  VK_NULL_HANDLE,
+  VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+  VK_PIPELINE_BIND_POINT_GRAPHICS,
+  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+  VK_POLYGON_MODE_FILL,
+  VK_PRESENT_MODE_FIFO_KHR,
+  VK_PRESENT_MODE_MAILBOX_KHR,
+  VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+  VK_QUEUE_COMPUTE_BIT,
+  VK_QUEUE_GRAPHICS_BIT,
+  VK_QUEUE_SPARSE_BINDING_BIT,
+  VK_QUEUE_TRANSFER_BIT,
+  VK_SAMPLE_COUNT_1_BIT,
+  VK_SHADER_STAGE_FRAGMENT_BIT,
+  VK_SHADER_STAGE_VERTEX_BIT,
+  VK_SHARING_MODE_CONCURRENT,
+  VK_SHARING_MODE_EXCLUSIVE,
+  VK_SUBOPTIMAL_KHR,
+  VK_SUBPASS_CONTENTS_INLINE,
+  VK_SUBPASS_EXTERNAL,
+  VK_SUCCESS,
   VkApplicationInfo,
-  vkCreateInstance,
-  vkDestroyInstance,
-  vkEnumerateInstanceLayerProperties,
+  VkAttachmentDescription,
+  VkAttachmentReference,
+  VkBuffer,
+  VkBufferCopy,
+  VkBufferCreateInfo,
+  VkBufferUsageFlagBits,
+  VkClearColorValue,
+  VkClearValue,
+  VkCommandBuffer,
+  VkCommandBufferAllocateInfo,
+  VkCommandBufferBeginInfo,
+  VkCommandPool,
+  VkCommandPoolCreateInfo,
+  VkComponentMapping,
+  VkDevice,
+  VkDeviceCreateInfo,
+  VkDeviceMemory,
+  VkDeviceQueueCreateInfo,
+  VkExtensionProperties,
+  VkExtent2D,
+  VkFence,
+  VkFenceCreateInfo,
+  VkFramebuffer,
+  VkFramebufferCreateInfo,
+  VkGraphicsPipelineCreateInfo,
+  VkImage,
+  VkImageSubresourceRange,
+  VkImageView,
+  VkImageViewCreateInfo,
   VkInstance,
   VkInstanceCreateInfo,
   VkLayerProperties,
+  VkMemoryAllocateInfo,
+  VkMemoryPropertyFlagBits,
+  VkMemoryRequirements,
+  VkOffset2D,
   VkPhysicalDevice,
-  vkEnumeratePhysicalDevices,
-  VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
-  VK_MAKE_VERSION,
-  VK_NULL_HANDLE,
-  VulkanWindow,
-  VkPhysicalDeviceProperties,
-  vkGetPhysicalDeviceProperties,
   VkPhysicalDeviceFeatures,
-  vkGetPhysicalDeviceFeatures,
-  VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
-  vkGetPhysicalDeviceQueueFamilyProperties,
-  VkQueueFamilyProperties,
-  VK_QUEUE_GRAPHICS_BIT,
-  VkDevice,
-  VkDeviceQueueCreateInfo,
-  VkDeviceCreateInfo,
-  vkCreateDevice,
-  vkDestroyDevice,
+  VkPhysicalDeviceMemoryProperties,
+  VkPhysicalDeviceProperties,
+  VkPipeline,
+  VkPipelineColorBlendAttachmentState,
+  VkPipelineColorBlendStateCreateInfo,
+  VkPipelineDynamicStateCreateInfo,
+  VkPipelineInputAssemblyStateCreateInfo,
+  VkPipelineLayout,
+  VkPipelineLayoutCreateInfo,
+  VkPipelineMultisampleStateCreateInfo,
+  VkPipelineRasterizationStateCreateInfo,
+  VkPipelineShaderStageCreateInfo,
+  VkPipelineVertexInputStateCreateInfo,
+  VkPipelineViewportStateCreateInfo,
+  VkPresentInfoKHR,
+  VkPresentModeKHR,
   VkQueue,
-  vkGetDeviceQueue,
-  VK_QUEUE_COMPUTE_BIT,
-  VK_QUEUE_TRANSFER_BIT,
-  VK_QUEUE_SPARSE_BINDING_BIT,
-  VkSurfaceKHR,
-  vkDestroySurfaceKHR,
-  vkGetPhysicalDeviceSurfaceSupportKHR,
-  VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-  vkEnumerateDeviceExtensionProperties,
-  VkExtensionProperties,
+  VkQueueFamilyProperties,
+  VkRect2D,
+  VkRenderPass,
+  VkRenderPassBeginInfo,
+  VkRenderPassCreateInfo,
+  VkSemaphore,
+  VkSemaphoreCreateInfo,
+  VkShaderModule,
+  VkShaderModuleCreateInfo,
+  VkSubmitInfo,
+  VkSubpassDependency,
+  VkSubpassDescription,
   VkSurfaceCapabilitiesKHR,
   VkSurfaceFormatKHR,
+  VkSurfaceKHR,
+  VkSwapchainCreateInfoKHR,
+  VkSwapchainKHR,
+  VkViewport,
+  VulkanWindow,
+  vkAcquireNextImageKHR,
+  vkAllocateCommandBuffers,
+  vkAllocateMemory,
+  vkBeginCommandBuffer,
+  vkBindBufferMemory,
+  vkCmdBeginRenderPass,
+  vkCmdBindPipeline,
+  vkCmdBindVertexBuffers,
+  vkCmdCopyBuffer,
+  vkCmdDraw,
+  vkCmdEndRenderPass,
+  vkCreateBuffer,
+  vkCreateCommandPool,
+  vkCreateDevice,
+  vkCreateFence,
+  vkCreateFramebuffer,
+  vkCreateGraphicsPipelines,
+  vkCreateImageView,
+  vkCreateInstance,
+  vkCreatePipelineLayout,
+  vkCreateRenderPass,
+  vkCreateSemaphore,
+  vkCreateShaderModule,
+  vkCreateSwapchainKHR,
+  vkDestroyBuffer,
+  vkDestroyCommandPool,
+  vkDestroyDevice,
+  vkDestroyFence,
+  vkDestroyFramebuffer,
+  vkDestroyImageView,
+  vkDestroyInstance,
+  vkDestroyPipeline,
+  vkDestroyPipelineLayout,
+  vkDestroyRenderPass,
+  vkDestroySemaphore,
+  vkDestroyShaderModule,
+  vkDestroySurfaceKHR,
+  vkDestroySwapchainKHR,
+  vkDeviceWaitIdle,
+  vkEndCommandBuffer,
+  vkEnumerateDeviceExtensionProperties,
+  vkEnumerateInstanceLayerProperties,
+  vkEnumeratePhysicalDevices,
+  vkFreeCommandBuffers,
+  vkFreeMemory,
+  vkGetBufferMemoryRequirements,
+  vkGetDeviceQueue,
+  vkGetPhysicalDeviceFeatures,
+  vkGetPhysicalDeviceMemoryProperties,
+  vkGetPhysicalDeviceProperties,
+  vkGetPhysicalDeviceQueueFamilyProperties,
   vkGetPhysicalDeviceSurfaceCapabilitiesKHR,
   vkGetPhysicalDeviceSurfaceFormatsKHR,
   vkGetPhysicalDeviceSurfacePresentModesKHR,
-  VK_FORMAT_B8G8R8A8_SRGB,
-  VK_COLORSPACE_SRGB_NONLINEAR_KHR,
-  VK_PRESENT_MODE_MAILBOX_KHR,
-  VK_PRESENT_MODE_FIFO_KHR,
-  VkPresentModeKHR,
-  VkExtent2D,
-  VkSwapchainCreateInfoKHR,
-  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-  VK_SHARING_MODE_CONCURRENT,
-  VK_SHARING_MODE_EXCLUSIVE,
-  VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-  VkSwapchainKHR,
-  vkCreateSwapchainKHR,
-  vkDestroySwapchainKHR,
-  VkImage,
+  vkGetPhysicalDeviceSurfaceSupportKHR,
   vkGetSwapchainImagesKHR,
-  VkImageView,
-  VkImageViewCreateInfo,
-  VK_IMAGE_VIEW_TYPE_2D,
-  VkComponentMapping,
-  VK_COMPONENT_SWIZZLE_IDENTITY,
-  VkImageSubresourceRange,
-  VK_IMAGE_ASPECT_COLOR_BIT,
-  vkCreateImageView,
-  vkDestroyImageView,
-  VkShaderModuleCreateInfo,
-  VkShaderModule,
-  vkCreateShaderModule,
-  vkDestroyShaderModule,
-  VkPipelineShaderStageCreateInfo,
-  VK_SHADER_STAGE_VERTEX_BIT,
-  VK_SHADER_STAGE_FRAGMENT_BIT,
-  VkPipelineVertexInputStateCreateInfo,
-  VkPipelineInputAssemblyStateCreateInfo,
-  VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-  VkViewport,
-  VkRect2D,
-  VkOffset2D,
-  VkPipelineViewportStateCreateInfo,
-  VkPipelineRasterizationStateCreateInfo,
-  VK_POLYGON_MODE_FILL,
-  VK_CULL_MODE_BACK_BIT,
-  VK_FRONT_FACE_CLOCKWISE,
-  VkPipelineMultisampleStateCreateInfo,
-  VK_SAMPLE_COUNT_1_BIT,
-  VkPipelineColorBlendAttachmentState,
-  VK_COLOR_COMPONENT_R_BIT,
-  VK_COLOR_COMPONENT_G_BIT,
-  VK_COLOR_COMPONENT_B_BIT,
-  VK_COLOR_COMPONENT_A_BIT,
-  VK_BLEND_FACTOR_ONE,
-  VK_BLEND_FACTOR_ZERO,
-  VK_BLEND_OP_ADD,
-  VK_BLEND_FACTOR_SRC_ALPHA,
-  VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
-  VkPipelineColorBlendStateCreateInfo,
-  VK_LOGIC_OP_COPY,
-  VK_DYNAMIC_STATE_VIEWPORT,
-  VK_DYNAMIC_STATE_LINE_WIDTH,
-  VK_DYNAMIC_STATE_BLEND_CONSTANTS,
-  VkPipelineDynamicStateCreateInfo,
-  VkPipelineLayout,
-  VkPipelineLayoutCreateInfo,
-  vkCreatePipelineLayout,
-  vkDestroyPipelineLayout,
-  VkAttachmentDescription,
-  VK_ATTACHMENT_LOAD_OP_CLEAR,
-  VK_ATTACHMENT_STORE_OP_STORE,
-  VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-  VK_ATTACHMENT_STORE_OP_DONT_CARE,
-  VK_IMAGE_LAYOUT_UNDEFINED,
-  VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-  VkAttachmentReference,
-  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-  VkSubpassDescription,
-  VK_PIPELINE_BIND_POINT_GRAPHICS,
-  VkRenderPass,
-  VkRenderPassCreateInfo,
-  vkCreateRenderPass,
-  vkDestroyRenderPass,
-  VkGraphicsPipelineCreateInfo,
-  VkPipeline,
-  vkCreateGraphicsPipelines,
-  vkDestroyPipeline,
-  VkFramebuffer,
-  VkFramebufferCreateInfo,
-  vkCreateFramebuffer,
-  vkDestroyFramebuffer,
-  VkCommandPoolCreateInfo,
-  VkCommandPool,
-  vkCreateCommandPool,
-  vkDestroyCommandPool,
-  VkCommandBuffer,
-  VkCommandBufferAllocateInfo,
-  VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-  vkAllocateCommandBuffers,
-  VkCommandBufferBeginInfo,
-  vkBeginCommandBuffer,
-  VkRenderPassBeginInfo,
-  VkClearValue,
-  VkClearColorValue,
-  vkCmdBeginRenderPass,
-  VK_SUBPASS_CONTENTS_INLINE,
-  vkCmdBindPipeline,
-  vkCmdDraw,
-  vkCmdEndRenderPass,
-  vkEndCommandBuffer,
-  VkSemaphore,
-  VkSemaphoreCreateInfo,
-  vkCreateSemaphore,
-  vkDestroySemaphore,
-  vkAcquireNextImageKHR,
-  VkSubmitInfo,
-  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-  vkQueueSubmit,
-  VkSubpassDependency,
-  VK_SUBPASS_EXTERNAL,
-  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-  VkPresentInfoKHR,
-  vkQueuePresentKHR,
-  VkFence,
-  vkCreateFence,
-  VkFenceCreateInfo,
-  vkDestroyFence,
-  vkWaitForFences,
-  vkResetFences,
-  VK_FENCE_CREATE_SIGNALED_BIT,
-  vkDeviceWaitIdle,
-  vkFreeCommandBuffers,
-  VK_ERROR_OUT_OF_DATE_KHR,
-  VK_SUCCESS,
-  VK_SUBOPTIMAL_KHR,
-  VkBufferCreateInfo,
-  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-  VkBuffer,
-  vkCreateBuffer,
-  vkDestroyBuffer,
-  VkMemoryRequirements,
-  vkGetBufferMemoryRequirements,
-  VkMemoryPropertyFlagBits,
-  VkPhysicalDeviceMemoryProperties,
-  vkGetPhysicalDeviceMemoryProperties,
-  VkMemoryAllocateInfo,
-  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-  VkDeviceMemory,
-  vkAllocateMemory,
-  vkBindBufferMemory,
-  vkFreeMemory,
   vkMapMemory,
+  vkQueuePresentKHR,
+  vkQueueSubmit,
+  vkQueueWaitIdle,
+  vkResetFences,
   vkUnmapMemory,
-  vkCmdBindVertexBuffers,
+  vkWaitForFences,
 } from 'nvk'
+
 import { GLSL } from 'nvk-essentials'
-
-import { ASSERT_VK_RESULT, memoryCopy } from './utils'
-import { Vertex } from './Vertex'
-
 import SegfaultHandler from 'segfault-handler'
+import { Vertex } from './Vertex'
+import fs from 'fs'
+import path from 'path'
+
 SegfaultHandler.registerHandler('crash.log')
 
 const MAX_FRAMES_IN_FLIGHT = 2
@@ -215,10 +223,14 @@ class SwapChainSupportDetails {
 }
 
 class QueueFamilyIndices {
-  constructor(public graphicsFamily: null | number = null, public presentFamily: null | number = null) {}
+  constructor(
+    public graphicsFamily: null | number = null,
+    public presentFamily: null | number = null,
+    public transferFamily: null | number = null
+  ) {}
 
   public isComplete() {
-    return this.graphicsFamily != null && this.presentFamily != null
+    return this.graphicsFamily != null && this.presentFamily != null && this.transferFamily != null
   }
 }
 
@@ -364,6 +376,7 @@ const initVulkan = (
   let queueFamilyIndices: QueueFamilyIndices
   let presentQueue: VkQueue
   let graphicsQueue: VkQueue
+  let transferQueue: VkQueue
   let swapChain: VkSwapchainKHR
   let swapChainImages: VkImage[]
   let surfaceFormat: VkSurfaceFormatKHR
@@ -374,8 +387,9 @@ const initVulkan = (
   let pipelineLayout: VkPipelineLayout
   let graphicsPipeline: VkPipeline
   let swapChainFramebuffers: VkFramebuffer[]
-  let commandPool: VkCommandPool
-  let commandBuffers: VkCommandBuffer[]
+  let graphicsCommandPool: VkCommandPool
+  let graphicsCommandBuffers: VkCommandBuffer[]
+  let transferCommandPool: VkCommandPool
   let imageAvailableSemaphores: VkSemaphore[]
   let rendererFinishedSemaphores: VkSemaphore[]
   let inFlightFences: VkFence[]
@@ -412,6 +426,8 @@ const initVulkan = (
       const queueFamily = queueFamilies[i]
       if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
         queueFamilyIndices.graphicsFamily = i
+      } else if (queueFamily.queueFlags & VK_QUEUE_TRANSFER_BIT & ~VK_QUEUE_GRAPHICS_BIT) {
+        queueFamilyIndices.transferFamily = i
       }
 
       const presentSupport = { $: false }
@@ -509,7 +525,7 @@ const initVulkan = (
   const createLogicalDevice = (): void => {
     const queuePriority = new Float32Array([1.0])
     const uniqueQueueFamilies = Array.from(
-      new Set([queueFamilyIndices.graphicsFamily, queueFamilyIndices.presentFamily])
+      new Set([queueFamilyIndices.graphicsFamily, queueFamilyIndices.presentFamily, queueFamilyIndices.transferFamily])
     )
     const queueCreateInfos: VkDeviceQueueCreateInfo[] = uniqueQueueFamilies.map(
       (index) =>
@@ -541,6 +557,9 @@ const initVulkan = (
 
     presentQueue = new VkQueue()
     vkGetDeviceQueue(device, queueFamilyIndices.presentFamily!, 0, presentQueue)
+
+    transferQueue = new VkQueue()
+    vkGetDeviceQueue(device, queueFamilyIndices.transferFamily!, 0, transferQueue)
   }
 
   const createSurface = (): void => {
@@ -582,15 +601,19 @@ const initVulkan = (
 
     if (queueFamilyIndices.graphicsFamily != queueFamilyIndices.presentFamily) {
       swapChainCreatInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT
-      swapChainCreatInfo.queueFamilyIndexCount = 2
+      swapChainCreatInfo.queueFamilyIndexCount = 3
       swapChainCreatInfo.pQueueFamilyIndices = new Uint32Array([
         queueFamilyIndices.graphicsFamily!,
         queueFamilyIndices.presentFamily!,
+        queueFamilyIndices.transferFamily!,
       ])
     } else {
       swapChainCreatInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE
-      swapChainCreatInfo.queueFamilyIndexCount = 0
-      swapChainCreatInfo.pQueueFamilyIndices = null
+      swapChainCreatInfo.queueFamilyIndexCount = 2
+      swapChainCreatInfo.pQueueFamilyIndices = new Uint32Array([
+        queueFamilyIndices.graphicsFamily!,
+        queueFamilyIndices.transferFamily!,
+      ])
     }
 
     swapChainCreatInfo.preTransform = swapChainSupportDetails.capabilities.currentTransform
@@ -616,8 +639,8 @@ const initVulkan = (
     }
     swapChainFramebuffers = []
 
-    vkFreeCommandBuffers(device, commandPool, commandBuffers.length, commandBuffers)
-    commandBuffers = []
+    vkFreeCommandBuffers(device, graphicsCommandPool, graphicsCommandBuffers.length, graphicsCommandBuffers)
+    graphicsCommandBuffers = []
 
     vkDestroyPipeline(device, graphicsPipeline, null)
     graphicsPipeline = VK_NULL_HANDLE as any
@@ -905,72 +928,150 @@ const initVulkan = (
     }
   }
 
-  const createCommandPool = (): void => {
-    const poolCreateInfo = new VkCommandPoolCreateInfo({
+  const createCommandPools = (): void => {
+    const graphicsPoolCreateInfo = new VkCommandPoolCreateInfo({
       queueFamilyIndex: queueFamilyIndices.graphicsFamily!,
       flags: 0,
     })
-    commandPool = new VkCommandPool()
+    graphicsCommandPool = new VkCommandPool()
     ASSERT_VK_RESULT(
-      vkCreateCommandPool(device, poolCreateInfo, null, commandPool),
+      vkCreateCommandPool(device, graphicsPoolCreateInfo, null, graphicsCommandPool),
       'Unable to create graphics command pool'
+    )
+
+    const transferPoolCreateInfo = new VkCommandPoolCreateInfo({
+      queueFamilyIndex: queueFamilyIndices.transferFamily!,
+      flags: 0,
+    })
+    transferCommandPool = new VkCommandPool()
+    ASSERT_VK_RESULT(
+      vkCreateCommandPool(device, transferPoolCreateInfo, null, transferCommandPool),
+      'Unable to create transfer command pool'
     )
   }
 
   const createVertexBuffer = (): void => {
     const buffer = Vertex.buffer(vertices)
-    const bufferInfo = new VkBufferCreateInfo({
-      size: buffer.buffer.byteLength,
-      usage: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-      sharingMode: VK_SHARING_MODE_EXCLUSIVE,
-    })
+
+    const stagingBuffer = new VkBuffer()
+    const stagingBufferMemory = new VkDeviceMemory()
+    createBuffer(
+      buffer.byteLength,
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+      stagingBuffer,
+      stagingBufferMemory
+    )
+
+    const dataPtr = { $: 0n }
+    vkMapMemory(device, stagingBufferMemory, 0, buffer.byteLength, 0, dataPtr)
+    memoryCopy(dataPtr.$, buffer.buffer, buffer.byteLength)
+    vkUnmapMemory(device, stagingBufferMemory)
+
     vertexBuffer = new VkBuffer()
-    ASSERT_VK_RESULT(vkCreateBuffer(device, bufferInfo, null, vertexBuffer), 'Unable to create vertex buffer!')
+    vertexBufferMemory = new VkDeviceMemory()
+    createBuffer(
+      buffer.byteLength,
+      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      vertexBuffer,
+      vertexBufferMemory
+    )
+
+    copyBuffer(stagingBuffer, vertexBuffer, buffer.byteLength)
+
+    vkDestroyBuffer(device, stagingBuffer, null)
+    vkFreeMemory(device, stagingBufferMemory, null)
+  }
+
+  const copyBuffer = (srcBuffer: VkBuffer, dstBuffer: VkBuffer, size: number) => {
+    const allocInfo = new VkCommandBufferAllocateInfo({
+      level: VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+      commandPool: transferCommandPool,
+      commandBufferCount: 1,
+    })
+
+    const transferCommandBuffer = new VkCommandBuffer()
+    vkAllocateCommandBuffers(device, allocInfo, [transferCommandBuffer])
+
+    const beginInfo = new VkCommandBufferBeginInfo({
+      flags: VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    })
+    vkBeginCommandBuffer(transferCommandBuffer, beginInfo)
+
+    const copyRegion = new VkBufferCopy({
+      srcOffset: 0,
+      dstOffset: 0,
+      size,
+    })
+
+    vkCmdCopyBuffer(transferCommandBuffer, srcBuffer, dstBuffer, 1, [copyRegion])
+
+    vkEndCommandBuffer(transferCommandBuffer)
+
+    const submitInfo = new VkSubmitInfo({
+      commandBufferCount: 1,
+      pCommandBuffers: [transferCommandBuffer],
+    })
+
+    vkQueueSubmit(transferQueue, 1, [submitInfo], null)
+    vkQueueWaitIdle(transferQueue)
+
+    vkFreeCommandBuffers(device, transferCommandPool, 1, [transferCommandBuffer])
+  }
+
+  const createBuffer = (
+    size: number,
+    usage: VkBufferUsageFlagBits,
+    properties: VkMemoryPropertyFlagBits,
+    buffer: VkBuffer,
+    bufferMemory: VkDeviceMemory
+  ) => {
+    const bufferInfo = new VkBufferCreateInfo({
+      size,
+      usage,
+      sharingMode: VK_SHARING_MODE_CONCURRENT,
+      queueFamilyIndexCount: 2,
+      pQueueFamilyIndices: new Uint32Array([queueFamilyIndices.transferFamily!, queueFamilyIndices.graphicsFamily!]),
+    })
+    ASSERT_VK_RESULT(vkCreateBuffer(device, bufferInfo, null, buffer), 'Unable to create vertex buffer!')
 
     const memRequirements = new VkMemoryRequirements()
-    vkGetBufferMemoryRequirements(device, vertexBuffer, memRequirements)
+    vkGetBufferMemoryRequirements(device, buffer, memRequirements)
 
     const allocInfo = new VkMemoryAllocateInfo({
       allocationSize: memRequirements.size,
-      memoryTypeIndex: findMemoryType(
-        physicalDevice,
-        memRequirements.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-      ),
+      memoryTypeIndex: findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties),
     })
 
-    vertexBufferMemory = new VkDeviceMemory()
     ASSERT_VK_RESULT(
-      vkAllocateMemory(device, allocInfo, null, vertexBufferMemory),
+      vkAllocateMemory(device, allocInfo, null, bufferMemory),
       'Unable to allocate vertex buffer memory!'
     )
 
-    vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0)
-
-    const dataPtr = { $: 0n }
-    vkMapMemory(device, vertexBufferMemory, 0, buffer.buffer.byteLength, 0, dataPtr)
-    memoryCopy(dataPtr.$, buffer.buffer, buffer.buffer.byteLength)
-    vkUnmapMemory(device, vertexBufferMemory)
+    vkBindBufferMemory(device, buffer, bufferMemory, 0)
   }
 
   const createCommandBuffers = () => {
-    commandBuffers = new Array(swapChainFramebuffers.length).fill(0).map(() => new VkCommandBuffer())
-
-    const allocInfo = new VkCommandBufferAllocateInfo({
-      commandPool: commandPool,
+    graphicsCommandBuffers = new Array(swapChainFramebuffers.length).fill(0).map(() => new VkCommandBuffer())
+    const graphicsAllocInfo = new VkCommandBufferAllocateInfo({
+      commandPool: graphicsCommandPool,
       level: VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-      commandBufferCount: commandBuffers.length,
+      commandBufferCount: graphicsCommandBuffers.length,
     })
-    ASSERT_VK_RESULT(vkAllocateCommandBuffers(device, allocInfo, commandBuffers), 'Unable to allocate command buffers!')
+    ASSERT_VK_RESULT(
+      vkAllocateCommandBuffers(device, graphicsAllocInfo, graphicsCommandBuffers),
+      'Unable to allocate graphics command buffers!'
+    )
 
-    for (let i = 0; i < commandBuffers.length; ++i) {
+    for (let i = 0; i < graphicsCommandBuffers.length; ++i) {
       const beginInfo = new VkCommandBufferBeginInfo({
         flags: 0,
         pInheritanceInfo: null,
       })
 
       ASSERT_VK_RESULT(
-        vkBeginCommandBuffer(commandBuffers[i], beginInfo),
+        vkBeginCommandBuffer(graphicsCommandBuffers[i], beginInfo),
         `Unable to begin recording a command buffer under index ${i}`
       )
 
@@ -988,18 +1089,18 @@ const initVulkan = (
         pClearValues: [clearColor],
       })
 
-      vkCmdBeginRenderPass(commandBuffers[i], renderPassInfo, VK_SUBPASS_CONTENTS_INLINE)
+      vkCmdBeginRenderPass(graphicsCommandBuffers[i], renderPassInfo, VK_SUBPASS_CONTENTS_INLINE)
 
-      vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline)
+      vkCmdBindPipeline(graphicsCommandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline)
 
       // TODO: report to repo nvk has broken typings for BigUint64Array
-      vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, [vertexBuffer], new BigUint64Array([0n]) as any)
+      vkCmdBindVertexBuffers(graphicsCommandBuffers[i], 0, 1, [vertexBuffer], new BigUint64Array([0n]) as any)
 
-      vkCmdDraw(commandBuffers[i], vertices.length, 1, 0, 0)
+      vkCmdDraw(graphicsCommandBuffers[i], vertices.length, 1, 0, 0)
 
-      vkCmdEndRenderPass(commandBuffers[i])
+      vkCmdEndRenderPass(graphicsCommandBuffers[i])
 
-      ASSERT_VK_RESULT(vkEndCommandBuffer(commandBuffers[i]), `Unable to record command buffer at index ${i}`)
+      ASSERT_VK_RESULT(vkEndCommandBuffer(graphicsCommandBuffers[i]), `Unable to record command buffer at index ${i}`)
     }
   }
 
@@ -1075,7 +1176,7 @@ const initVulkan = (
       pWaitSemaphores: [imageAvailableSemaphores[currentFrame]],
       pWaitDstStageMask: waitStages,
       commandBufferCount: 1,
-      pCommandBuffers: [commandBuffers[imageIndex.$]],
+      pCommandBuffers: [graphicsCommandBuffers[imageIndex.$]],
       signalSemaphoreCount: 1,
       pSignalSemaphores: [rendererFinishedSemaphores[currentFrame]],
     })
@@ -1117,7 +1218,7 @@ const initVulkan = (
   createRenderPass()
   createGraphicsPipeline()
   createFramebuffers()
-  createCommandPool()
+  createCommandPools()
   createVertexBuffer()
   createCommandBuffers()
   createSyncObjects()
@@ -1137,8 +1238,10 @@ const initVulkan = (
     imageAvailableSemaphores = []
     inFlightFences = []
 
-    vkDestroyCommandPool(device, commandPool, null)
-    commandPool = null!
+    vkDestroyCommandPool(device, transferCommandPool, null)
+    transferCommandPool = null!
+    vkDestroyCommandPool(device, graphicsCommandPool, null)
+    graphicsCommandPool = null!
     vkDestroyDevice(device, null)
     device = null!
     vkDestroySurfaceKHR(instance, surface, null)
@@ -1156,10 +1259,10 @@ const initVulkan = (
   const loop = () => {
     if (!window.shouldClose()) {
       const now = performance.now()
-      const delta = (now - lastFrame) | 0
+      const delta = now - lastFrame
       drawFrame()
       window.pollEvents()
-      window.title = `${windowTitle} - ${delta}ms`
+      window.title = `${windowTitle} - ${delta.toFixed(2)}ms - ${(1000 / delta).toFixed(2)}`
       lastFrame = now
 
       setTimeout(loop, 0)

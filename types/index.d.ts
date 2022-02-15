@@ -14,3 +14,7 @@ declare module 'nvk-essentials' {
     toSPIRVSync: (options: CompilerOptions) => { error: Error | null; output: Uint8Array }
   }
 }
+
+declare module global {
+  export * from 'nvk'
+}
