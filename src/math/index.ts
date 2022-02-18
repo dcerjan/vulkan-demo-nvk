@@ -1,0 +1,5 @@
+export { Mat4 } from './Mat4'
+export { Vec3 } from './Vec3'
+export { Vec4 } from './Vec4'
+export { Quaternion } from './Quaternion'
+export { EulerAngles } from './EulerAngles'

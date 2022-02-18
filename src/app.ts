@@ -1,4 +1,5 @@
 import { ASSERT_VK_RESULT, memoryCopy } from './utils'
+import { Mat4, Vec3 } from './math'
 import {
   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
   VK_ATTACHMENT_LOAD_OP_CLEAR,
@@ -33,7 +34,7 @@ import {
   VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
   VK_FENCE_CREATE_SIGNALED_BIT,
   VK_FORMAT_B8G8R8A8_SRGB,
-  VK_FRONT_FACE_CLOCKWISE,
+  VK_FRONT_FACE_COUNTER_CLOCKWISE,
   VK_IMAGE_ASPECT_COLOR_BIT,
   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
   VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -83,6 +84,12 @@ import {
   VkCommandPool,
   VkCommandPoolCreateInfo,
   VkComponentMapping,
+  VkDescriptorBufferInfo,
+  VkDescriptorPool,
+  VkDescriptorPoolCreateInfo,
+  VkDescriptorPoolSize,
+  VkDescriptorSet,
+  VkDescriptorSetAllocateInfo,
   VkDescriptorSetLayout,
   VkDescriptorSetLayoutBinding,
   VkDescriptorSetLayoutCreateInfo,
@@ -145,13 +152,16 @@ import {
   VkSwapchainCreateInfoKHR,
   VkSwapchainKHR,
   VkViewport,
+  VkWriteDescriptorSet,
   VulkanWindow,
   vkAcquireNextImageKHR,
   vkAllocateCommandBuffers,
+  vkAllocateDescriptorSets,
   vkAllocateMemory,
   vkBeginCommandBuffer,
   vkBindBufferMemory,
   vkCmdBeginRenderPass,
+  vkCmdBindDescriptorSets,
   vkCmdBindIndexBuffer,
   vkCmdBindPipeline,
   vkCmdBindVertexBuffers,
@@ -160,6 +170,7 @@ import {
   vkCmdEndRenderPass,
   vkCreateBuffer,
   vkCreateCommandPool,
+  vkCreateDescriptorPool,
   vkCreateDescriptorSetLayout,
   vkCreateDevice,
   vkCreateFence,
@@ -174,6 +185,7 @@ import {
   vkCreateSwapchainKHR,
   vkDestroyBuffer,
   vkDestroyCommandPool,
+  vkDestroyDescriptorPool,
   vkDestroyDescriptorSetLayout,
   vkDestroyDevice,
   vkDestroyFence,
@@ -211,6 +223,7 @@ import {
   vkQueueWaitIdle,
   vkResetFences,
   vkUnmapMemory,
+  vkUpdateDescriptorSets,
   vkWaitForFences,
 } from 'nvk'
 
@@ -218,7 +231,6 @@ import { GLSL } from 'nvk-essentials'
 import SegfaultHandler from 'segfault-handler'
 import { Vertex } from './Vertex'
 import fs from 'fs'
-import { mat4 } from 'gl-matrix'
 import path from 'path'
 
 SegfaultHandler.registerHandler('crash.log')
@@ -247,25 +259,25 @@ class QueueFamilyIndices {
 
 class UniformBufferObject {
   private ubo: Float32Array
-  constructor(model: mat4, view: mat4, proj: mat4) {
-    this.ubo = new Float32Array([...model, ...view, ...proj])
+  constructor(model: Mat4, view: Mat4, proj: Mat4) {
+    this.ubo = new Float32Array([...model.m, ...view.m, ...proj.m])
   }
 
-  set model(matrix: mat4) {
-    for (let i = 0; i < matrix.length; ++i) {
-      this.ubo[i] = matrix[i]
+  set model(matrix: Mat4) {
+    for (let i = 0; i < matrix.m.length; ++i) {
+      this.ubo[i] = matrix.m[i]
     }
   }
 
-  set view(matrix: mat4) {
-    for (let i = 0; i < matrix.length; ++i) {
-      this.ubo[i + 4 * 16] = matrix[i]
+  set view(matrix: Mat4) {
+    for (let i = 0; i < matrix.m.length; ++i) {
+      this.ubo[i + 4 * 16] = matrix.m[i]
     }
   }
 
-  set proj(matrix: mat4) {
-    for (let i = 0; i < matrix.length; ++i) {
-      this.ubo[i + 2 * 4 * 16] = matrix[i]
+  set proj(matrix: Mat4) {
+    for (let i = 0; i < matrix.m.length; ++i) {
+      this.ubo[i + 2 * 4 * 16] = matrix.m[i]
     }
   }
 
@@ -601,6 +613,8 @@ const initVulkan = (
   let indexBufferMemory: VkDeviceMemory
   let uniformBuffers: VkBuffer[]
   let uniformBuffersMemory: VkDeviceMemory[]
+  let descriptorPool: VkDescriptorPool
+  let descriptorSets: VkDescriptorSet[]
 
   const vertices = [
     new Vertex([-0.5, -0.5], [1.0, 1.0, 1.0]),
@@ -610,11 +624,11 @@ const initVulkan = (
   ]
   const indices = [0, 1, 2, 2, 3, 0]
 
-  const uniforms = new UniformBufferObject(
-    [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-    [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-    [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-  )
+  const model = Mat4.Identity()
+  const view = Mat4.LookAt(new Vec3(5, 5, -10), Vec3.Null(), Vec3.Down())
+  const proj = Mat4.Perspective(75, 16 / 9, 0.01, 100.0)
+
+  const uniforms = new UniformBufferObject(model, view, proj)
 
   const findQueueFamilies = (): void => {
     queueFamilyIndices = new QueueFamilyIndices()
@@ -875,6 +889,8 @@ const initVulkan = (
     }
     uniformBuffers = []
     uniformBuffersMemory = []
+
+    vkDestroyDescriptorPool(device, descriptorPool, null)
   }
 
   const createImageViews = (): void => {
@@ -1054,7 +1070,7 @@ const initVulkan = (
       polygonMode: VK_POLYGON_MODE_FILL,
       lineWidth: 1.0,
       cullMode: VK_CULL_MODE_BACK_BIT,
-      frontFace: VK_FRONT_FACE_CLOCKWISE,
+      frontFace: VK_FRONT_FACE_COUNTER_CLOCKWISE,
       depthBiasEnable: false,
       depthBiasConstantFactor: 0.0,
       depthBiasClamp: 0.0,
@@ -1227,6 +1243,23 @@ const initVulkan = (
     }
   }
 
+  const createDescriptorPool = () => {
+    const poolSize = new VkDescriptorPoolSize({
+      type: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+      descriptorCount: swapChainImages.length,
+    })
+    const poolCreateInfo = new VkDescriptorPoolCreateInfo({
+      poolSizeCount: 1,
+      pPoolSizes: [poolSize],
+      maxSets: swapChainImages.length,
+    })
+    descriptorPool = new VkDescriptorPool()
+    ASSERT_VK_RESULT(
+      vkCreateDescriptorPool(device, poolCreateInfo, null, descriptorPool),
+      'Unable o create descriptor pool!'
+    )
+  }
+
   const createCommandBuffers = (): void => {
     graphicsCommandBuffers = new Array(swapChainFramebuffers.length).fill(0).map(() => new VkCommandBuffer())
     const graphicsAllocInfo = new VkCommandBufferAllocateInfo({
@@ -1274,6 +1307,16 @@ const initVulkan = (
       vkCmdBindIndexBuffer(graphicsCommandBuffers[i], indexBuffer, 0n, VK_INDEX_TYPE_UINT16)
 
       // vkCmdDraw(graphicsCommandBuffers[i], vertices.length, 1, 0, 0)
+      vkCmdBindDescriptorSets(
+        graphicsCommandBuffers[i],
+        VK_PIPELINE_BIND_POINT_GRAPHICS,
+        pipelineLayout,
+        0,
+        1,
+        [descriptorSets[i]],
+        0,
+        null
+      )
       vkCmdDrawIndexed(graphicsCommandBuffers[i], indices.length, 1, 0, 0, 0)
 
       vkCmdEndRenderPass(graphicsCommandBuffers[i])
@@ -1320,15 +1363,44 @@ const initVulkan = (
     createGraphicsPipeline()
     createFramebuffers()
     createUniformBuffers()
+    createDescriptorPool()
+    createDescriptorSets()
     createCommandBuffers()
   }
 
-  const updateUniformBuffer = (currentImage: number) => {
-    const angle = Math.sin(performance.now() * 0.001)
+  const createDescriptorSets = () => {
+    const layouts = new Array(swapChainImages.length).fill(0).map(() => descriptorSetLayout)
+    const allocInfo = new VkDescriptorSetAllocateInfo({
+      descriptorPool: descriptorPool,
+      descriptorSetCount: swapChainImages.length,
+      pSetLayouts: layouts,
+    })
+    descriptorSets = new Array(swapChainImages.length).fill(0).map(() => new VkDescriptorSet())
+    ASSERT_VK_RESULT(vkAllocateDescriptorSets(device, allocInfo, descriptorSets), 'Unable to allocate descriptor sets!')
+    for (let i = 0; i < swapChainImages.length; ++i) {
+      const bufferInfo = new VkDescriptorBufferInfo({
+        buffer: uniformBuffers[i],
+        offset: 0,
+        range: uniforms.data.byteLength,
+      })
+      const descriptorWrite = new VkWriteDescriptorSet({
+        dstSet: descriptorSets[i],
+        dstBinding: 0,
+        dstArrayElement: 0,
+        descriptorType: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        descriptorCount: 1,
+        pBufferInfo: [bufferInfo],
+        pImageInfo: null,
+        pTexelBufferView: null,
+      })
+      vkUpdateDescriptorSets(device, 1, [descriptorWrite], 0, null)
+    }
+  }
 
-    const ca = Math.cos(angle)
-    const sa = Math.sin(angle)
-    uniforms.model = [ca, sa, 0.0, 0.0, -sa, ca, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+  const updateUniformBuffer = (currentImage: number) => {
+    const angle = performance.now() * 0.001 * 20
+
+    uniforms.model = Mat4.Rotation(new Vec3(0, 0, 1), angle)
 
     const dataPtr = { $: 0n }
     vkMapMemory(device, uniformBuffersMemory[currentImage], 0, uniforms.data.byteLength, 0, dataPtr)
@@ -1416,6 +1488,8 @@ const initVulkan = (
   createCommandPools()
   createIndexedVertexBuffer()
   createUniformBuffers()
+  createDescriptorPool()
+  createDescriptorSets()
   createCommandBuffers()
   createSyncObjects()
 
