@@ -2,6 +2,8 @@ import { ASSERT_VK_RESULT, memoryCopy } from './utils'
 import { Mat4, Vec3 } from './math'
 import {
   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+  VK_ACCESS_SHADER_READ_BIT,
+  VK_ACCESS_TRANSFER_WRITE_BIT,
   VK_ATTACHMENT_LOAD_OP_CLEAR,
   VK_ATTACHMENT_LOAD_OP_DONT_CARE,
   VK_ATTACHMENT_STORE_OP_DONT_CARE,
@@ -11,6 +13,7 @@ import {
   VK_BLEND_FACTOR_SRC_ALPHA,
   VK_BLEND_FACTOR_ZERO,
   VK_BLEND_OP_ADD,
+  VK_BORDER_COLOR_INT_OPAQUE_BLACK,
   VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
   VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -23,9 +26,11 @@ import {
   VK_COLOR_COMPONENT_R_BIT,
   VK_COMMAND_BUFFER_LEVEL_PRIMARY,
   VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+  VK_COMPARE_OP_ALWAYS,
   VK_COMPONENT_SWIZZLE_IDENTITY,
   VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
   VK_CULL_MODE_BACK_BIT,
+  VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
   VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
   VK_DYNAMIC_STATE_BLEND_CONSTANTS,
   VK_DYNAMIC_STATE_LINE_WIDTH,
@@ -33,13 +38,21 @@ import {
   VK_ERROR_OUT_OF_DATE_KHR,
   VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
   VK_FENCE_CREATE_SIGNALED_BIT,
+  VK_FILTER_LINEAR,
   VK_FORMAT_B8G8R8A8_SRGB,
+  VK_FORMAT_R8G8B8A8_SRGB,
   VK_FRONT_FACE_COUNTER_CLOCKWISE,
   VK_IMAGE_ASPECT_COLOR_BIT,
   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
   VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
   VK_IMAGE_LAYOUT_UNDEFINED,
+  VK_IMAGE_TILING_OPTIMAL,
+  VK_IMAGE_TYPE_2D,
   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+  VK_IMAGE_USAGE_SAMPLED_BIT,
+  VK_IMAGE_USAGE_TRANSFER_DST_BIT,
   VK_IMAGE_VIEW_TYPE_2D,
   VK_INDEX_TYPE_UINT16,
   VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -52,14 +65,20 @@ import {
   VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
   VK_PIPELINE_BIND_POINT_GRAPHICS,
   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+  VK_PIPELINE_STAGE_TRANSFER_BIT,
   VK_POLYGON_MODE_FILL,
   VK_PRESENT_MODE_FIFO_KHR,
   VK_PRESENT_MODE_MAILBOX_KHR,
   VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
   VK_QUEUE_COMPUTE_BIT,
+  VK_QUEUE_FAMILY_IGNORED,
   VK_QUEUE_GRAPHICS_BIT,
   VK_QUEUE_SPARSE_BINDING_BIT,
   VK_QUEUE_TRANSFER_BIT,
+  VK_SAMPLER_ADDRESS_MODE_REPEAT,
+  VK_SAMPLER_MIPMAP_MODE_LINEAR,
   VK_SAMPLE_COUNT_1_BIT,
   VK_SHADER_STAGE_FRAGMENT_BIT,
   VK_SHADER_STAGE_VERTEX_BIT,
@@ -75,6 +94,7 @@ import {
   VkBuffer,
   VkBufferCopy,
   VkBufferCreateInfo,
+  VkBufferImageCopy,
   VkBufferUsageFlagBits,
   VkClearColorValue,
   VkClearValue,
@@ -85,6 +105,7 @@ import {
   VkCommandPoolCreateInfo,
   VkComponentMapping,
   VkDescriptorBufferInfo,
+  VkDescriptorImageInfo,
   VkDescriptorPool,
   VkDescriptorPoolCreateInfo,
   VkDescriptorPoolSize,
@@ -101,11 +122,17 @@ import {
   VkExtent2D,
   VkFence,
   VkFenceCreateInfo,
+  VkFormat,
   VkFramebuffer,
   VkFramebufferCreateInfo,
   VkGraphicsPipelineCreateInfo,
   VkImage,
+  VkImageCreateInfo,
+  VkImageLayout,
+  VkImageMemoryBarrier,
   VkImageSubresourceRange,
+  VkImageTiling,
+  VkImageUsageFlagBits,
   VkImageView,
   VkImageViewCreateInfo,
   VkInstance,
@@ -129,6 +156,7 @@ import {
   VkPipelineMultisampleStateCreateInfo,
   VkPipelineRasterizationStateCreateInfo,
   VkPipelineShaderStageCreateInfo,
+  VkPipelineStageFlagBits,
   VkPipelineVertexInputStateCreateInfo,
   VkPipelineViewportStateCreateInfo,
   VkPresentInfoKHR,
@@ -139,6 +167,8 @@ import {
   VkRenderPass,
   VkRenderPassBeginInfo,
   VkRenderPassCreateInfo,
+  VkSampler,
+  VkSamplerCreateInfo,
   VkSemaphore,
   VkSemaphoreCreateInfo,
   VkShaderModule,
@@ -160,14 +190,17 @@ import {
   vkAllocateMemory,
   vkBeginCommandBuffer,
   vkBindBufferMemory,
+  vkBindImageMemory,
   vkCmdBeginRenderPass,
   vkCmdBindDescriptorSets,
   vkCmdBindIndexBuffer,
   vkCmdBindPipeline,
   vkCmdBindVertexBuffers,
   vkCmdCopyBuffer,
+  vkCmdCopyBufferToImage,
   vkCmdDrawIndexed,
   vkCmdEndRenderPass,
+  vkCmdPipelineBarrier,
   vkCreateBuffer,
   vkCreateCommandPool,
   vkCreateDescriptorPool,
@@ -176,10 +209,12 @@ import {
   vkCreateFence,
   vkCreateFramebuffer,
   vkCreateGraphicsPipelines,
+  vkCreateImage,
   vkCreateImageView,
   vkCreateInstance,
   vkCreatePipelineLayout,
   vkCreateRenderPass,
+  vkCreateSampler,
   vkCreateSemaphore,
   vkCreateShaderModule,
   vkCreateSwapchainKHR,
@@ -190,11 +225,13 @@ import {
   vkDestroyDevice,
   vkDestroyFence,
   vkDestroyFramebuffer,
+  vkDestroyImage,
   vkDestroyImageView,
   vkDestroyInstance,
   vkDestroyPipeline,
   vkDestroyPipelineLayout,
   vkDestroyRenderPass,
+  vkDestroySampler,
   vkDestroySemaphore,
   vkDestroyShaderModule,
   vkDestroySurfaceKHR,
@@ -208,6 +245,7 @@ import {
   vkFreeMemory,
   vkGetBufferMemoryRequirements,
   vkGetDeviceQueue,
+  vkGetImageMemoryRequirements,
   vkGetPhysicalDeviceFeatures,
   vkGetPhysicalDeviceMemoryProperties,
   vkGetPhysicalDeviceProperties,
@@ -236,6 +274,9 @@ import path from 'path'
 SegfaultHandler.registerHandler('crash.log')
 
 const MAX_FRAMES_IN_FLIGHT = 2
+
+type ImageDescriptor = { buffer: Buffer; width: number; height: number; pixelSize: number }
+type InputData = { uvGridImage: ImageDescriptor }
 
 class SwapChainSupportDetails {
   constructor(
@@ -341,7 +382,9 @@ const isDeviceSuitable = (device: VkPhysicalDevice, surface: VkSurfaceKHR, exten
   const properties = new VkPhysicalDeviceProperties()
   vkGetPhysicalDeviceProperties(device, properties)
 
-  const features = new VkPhysicalDeviceFeatures()
+  const features = new VkPhysicalDeviceFeatures({
+    samplerAnisotropy: true,
+  })
   vkGetPhysicalDeviceFeatures(device, features)
 
   const extensionsSupported = checkDeviceExtensionSupport(device, extensions)
@@ -357,7 +400,8 @@ const isDeviceSuitable = (device: VkPhysicalDevice, surface: VkSurfaceKHR, exten
     properties.deviceType === VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
     features.geometryShader &&
     extensionsSupported &&
-    swapChainAdequate
+    swapChainAdequate &&
+    features.samplerAnisotropy
 
   return { suitable, properties, features, swapChainSupport: swapChainSupport! }
 }
@@ -410,47 +454,60 @@ const createShaderModule = (device: VkDevice, shaderName: string, bytecode: Uint
   ] as const
 }
 
+const beginSingleCommand = (device: VkDevice, commandPool: VkCommandPool) => {
+  const allocInfo = new VkCommandBufferAllocateInfo({
+    level: VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+    commandPool: commandPool,
+    commandBufferCount: 1,
+  })
+  const commandBuffer = new VkCommandBuffer()
+  vkAllocateCommandBuffers(device, allocInfo, [commandBuffer])
+
+  const beginInfo = new VkCommandBufferBeginInfo({
+    flags: VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+  })
+
+  vkBeginCommandBuffer(commandBuffer, beginInfo)
+
+  return commandBuffer
+}
+
+const endSingleCommand = (
+  device: VkDevice,
+  commandQueue: VkQueue,
+  commandPool: VkCommandPool,
+  commandBuffer: VkCommandBuffer
+) => {
+  vkEndCommandBuffer(commandBuffer)
+
+  const submitInfo = new VkSubmitInfo({
+    commandBufferCount: 1,
+    pCommandBuffers: [commandBuffer],
+  })
+
+  vkQueueSubmit(commandQueue, 1, [submitInfo], null)
+  vkQueueWaitIdle(commandQueue)
+
+  vkFreeCommandBuffers(device, commandPool, 1, [commandBuffer])
+}
+
 const copyBuffer = (
   device: VkDevice,
   transferCommandPool: VkCommandPool,
   transferQueue: VkQueue,
   srcBuffer: VkBuffer,
   dstBuffer: VkBuffer,
-  size: number
+  size: number,
+  srcOffset: number = 0,
+  dstOffset: number = 0
 ) => {
-  const allocInfo = new VkCommandBufferAllocateInfo({
-    level: VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-    commandPool: transferCommandPool,
-    commandBufferCount: 1,
-  })
+  const transferCommandBuffer = beginSingleCommand(device, transferCommandPool)
 
-  const transferCommandBuffer = new VkCommandBuffer()
-  vkAllocateCommandBuffers(device, allocInfo, [transferCommandBuffer])
-
-  const beginInfo = new VkCommandBufferBeginInfo({
-    flags: VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-  })
-  vkBeginCommandBuffer(transferCommandBuffer, beginInfo)
-
-  const copyRegion = new VkBufferCopy({
-    srcOffset: 0,
-    dstOffset: 0,
-    size,
-  })
+  const copyRegion = new VkBufferCopy({ srcOffset, dstOffset, size })
 
   vkCmdCopyBuffer(transferCommandBuffer, srcBuffer, dstBuffer, 1, [copyRegion])
 
-  vkEndCommandBuffer(transferCommandBuffer)
-
-  const submitInfo = new VkSubmitInfo({
-    commandBufferCount: 1,
-    pCommandBuffers: [transferCommandBuffer],
-  })
-
-  vkQueueSubmit(transferQueue, 1, [submitInfo], null)
-  vkQueueWaitIdle(transferQueue)
-
-  vkFreeCommandBuffers(device, transferCommandPool, 1, [transferCommandBuffer])
+  endSingleCommand(device, transferQueue, transferCommandPool, transferCommandBuffer)
 }
 
 const createBuffer = (
@@ -569,7 +626,154 @@ const createIndexBuffer = (
   return [indexBuffer, indexBufferMemory] as const
 }
 
+const createImage = (
+  physicalDevice: VkPhysicalDevice,
+  device: VkDevice,
+  image: ImageDescriptor,
+  format: VkFormat,
+  tiling: VkImageTiling,
+  usage: VkImageUsageFlagBits,
+  properties: VkMemoryPropertyFlagBits
+) => {
+  const textureImage = new VkImage()
+  const textureImageMemory = new VkDeviceMemory()
+
+  const imageInfo = new VkImageCreateInfo()
+  imageInfo.imageType = VK_IMAGE_TYPE_2D
+  imageInfo.extent!.width = image.width
+  imageInfo.extent!.height = image.height
+  imageInfo.extent!.depth = 1
+  imageInfo.mipLevels = 1
+  imageInfo.arrayLayers = 1
+  imageInfo.format = format
+  imageInfo.tiling = tiling
+  imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+  imageInfo.usage = usage
+  imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE
+  imageInfo.samples = VK_SAMPLE_COUNT_1_BIT
+  imageInfo.flags = 0
+
+  ASSERT_VK_RESULT(vkCreateImage(device, imageInfo, null, textureImage), 'Unable to create an image!')
+
+  const memReq = new VkMemoryRequirements()
+  vkGetImageMemoryRequirements(device, textureImage, memReq)
+
+  const allocInfo = new VkMemoryAllocateInfo({
+    allocationSize: memReq.size,
+    memoryTypeIndex: findMemoryType(physicalDevice, memReq.memoryTypeBits, properties),
+  })
+  ASSERT_VK_RESULT(vkAllocateMemory(device, allocInfo, null, textureImageMemory), 'Unable to allocate image memory')
+
+  vkBindImageMemory(device, textureImage, textureImageMemory, 0)
+
+  return [textureImage, textureImageMemory] as const
+}
+
+const copyBufferToImage = (
+  device: VkDevice,
+  commandQueue: VkQueue,
+  commandPool: VkCommandPool,
+  buffer: VkBuffer,
+  image: VkImage,
+  width: number,
+  height: number
+) => {
+  const commandBuffer = beginSingleCommand(device, commandPool)
+
+  const region = new VkBufferImageCopy()
+  region.bufferOffset = 0
+  region.bufferRowLength = 0
+  region.bufferImageHeight = 0
+  region.imageSubresource!.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT
+  region.imageSubresource!.mipLevel = 0
+  region.imageSubresource!.baseArrayLayer = 0
+  region.imageSubresource!.layerCount = 1
+  region.imageOffset!.x = 0
+  region.imageOffset!.y = 0
+  region.imageOffset!.z = 0
+  region.imageExtent!.width = width
+  region.imageExtent!.height = height
+  region.imageExtent!.depth = 1
+
+  vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, [region])
+
+  endSingleCommand(device, commandQueue, commandPool, commandBuffer)
+}
+
+const transitionImageLayout = (
+  device: VkDevice,
+  commandQueue: VkQueue,
+  commandPool: VkCommandPool,
+  image: VkImage,
+  format: VkFormat,
+  oldLayout: VkImageLayout,
+  newLayout: VkImageLayout
+) => {
+  const commandBuffer = beginSingleCommand(device, commandPool)
+
+  const barrier = new VkImageMemoryBarrier()
+  barrier.oldLayout = oldLayout
+  barrier.newLayout = newLayout
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED
+  barrier.image = image
+  barrier.subresourceRange!.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT
+  barrier.subresourceRange!.baseMipLevel = 0
+  barrier.subresourceRange!.levelCount = 1
+  barrier.subresourceRange!.baseArrayLayer = 0
+  barrier.subresourceRange!.layerCount = 1
+
+  let sourceStage: VkPipelineStageFlagBits
+  let destinationStage: VkPipelineStageFlagBits
+
+  if (oldLayout === VK_IMAGE_LAYOUT_UNDEFINED && newLayout === VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+    barrier.srcAccessMask = 0
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT
+
+    sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+    destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT
+  } else if (
+    oldLayout === VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+    newLayout === VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+  ) {
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT
+
+    sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT
+    destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+  } else {
+    throw new Error('Invalid oldLayout and newLAyout combination encountered!')
+  }
+
+  vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage, 0, 0, null, 0, null, 1, [barrier])
+
+  endSingleCommand(device, commandQueue, commandPool, commandBuffer)
+}
+
+const createImageView = (device: VkDevice, image: VkImage, format: VkFormat) => {
+  const viewInfo = new VkImageViewCreateInfo()
+  viewInfo.image = image
+  viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D
+  viewInfo.format = format
+  viewInfo.subresourceRange!.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT
+  viewInfo.subresourceRange!.baseMipLevel = 0
+  viewInfo.subresourceRange!.levelCount = 1
+  viewInfo.subresourceRange!.baseArrayLayer = 0
+  viewInfo.subresourceRange!.layerCount = 1
+  viewInfo.components!.r = VK_COMPONENT_SWIZZLE_IDENTITY
+  viewInfo.components!.g = VK_COMPONENT_SWIZZLE_IDENTITY
+  viewInfo.components!.b = VK_COMPONENT_SWIZZLE_IDENTITY
+  viewInfo.components!.a = VK_COMPONENT_SWIZZLE_IDENTITY
+
+  const imageView = new VkImageView()
+
+  ASSERT_VK_RESULT(vkCreateImageView(device, viewInfo, null, imageView), 'Unable to create texture image view!')
+
+  return imageView
+}
+
 const initVulkan = (
+  data: InputData,
   windowSize: { x: number; y: number } = { x: 1920, y: 1080 },
   windowTitle: string = 'typescript-example',
   validationLayers: string[] = ['VK_LAYER_KHRONOS_validation'],
@@ -615,17 +819,21 @@ const initVulkan = (
   let uniformBuffersMemory: VkDeviceMemory[]
   let descriptorPool: VkDescriptorPool
   let descriptorSets: VkDescriptorSet[]
+  let textureImage: VkImage
+  let textureImageMemory: VkDeviceMemory
+  let textureImageView: VkImageView
+  let textureSampler: VkSampler
 
   const vertices = [
-    new Vertex([-0.5, -0.5], [1.0, 1.0, 1.0]),
-    new Vertex([0.5, -0.5], [0.0, 1.0, 0.0]),
-    new Vertex([0.5, 0.5], [0.0, 0.0, 1.0]),
-    new Vertex([-0.5, 0.5], [1.0, 0.0, 0.0]),
+    new Vertex([-0.5, -0.5], [1.0, 1.0, 1.0], [1.0, 0.0]),
+    new Vertex([0.5, -0.5], [0.0, 1.0, 0.0], [0.0, 0.0]),
+    new Vertex([0.5, 0.5], [0.0, 0.0, 1.0], [0.0, 1.0]),
+    new Vertex([-0.5, 0.5], [1.0, 0.0, 0.0], [1.0, 1.0]),
   ]
   const indices = [0, 1, 2, 2, 3, 0]
 
   const model = Mat4.Identity()
-  const view = Mat4.LookAt(new Vec3(5, 5, -10), Vec3.Null(), Vec3.Down())
+  const view = Mat4.LookAt(new Vec3(5, 5, -10).mutScale(0.25), Vec3.Null(), Vec3.Down())
   const proj = Mat4.Perspective(75, 16 / 9, 0.01, 100.0)
 
   const uniforms = new UniformBufferObject(model, view, proj)
@@ -834,7 +1042,7 @@ const initVulkan = (
         queueFamilyIndices.transferFamily!,
       ])
     } else {
-      swapChainCreatInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE
+      swapChainCreatInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT
       swapChainCreatInfo.queueFamilyIndexCount = 2
       swapChainCreatInfo.pQueueFamilyIndices = new Uint32Array([
         queueFamilyIndices.graphicsFamily!,
@@ -894,31 +1102,10 @@ const initVulkan = (
   }
 
   const createImageViews = (): void => {
-    swapChainImageViews = new Array(swapChainImages.length).fill(0).map(() => new VkImageView())
+    swapChainImageViews = []
 
     for (let i = 0; i < swapChainImages.length; ++i) {
-      const createInfo = new VkImageViewCreateInfo({
-        image: swapChainImages[i],
-        viewType: VK_IMAGE_VIEW_TYPE_2D,
-        format: surfaceFormat.format,
-        components: new VkComponentMapping({
-          r: VK_COMPONENT_SWIZZLE_IDENTITY,
-          g: VK_COMPONENT_SWIZZLE_IDENTITY,
-          b: VK_COMPONENT_SWIZZLE_IDENTITY,
-          a: VK_COMPONENT_SWIZZLE_IDENTITY,
-        }),
-        subresourceRange: new VkImageSubresourceRange({
-          aspectMask: VK_IMAGE_ASPECT_COLOR_BIT,
-          baseMipLevel: 0,
-          levelCount: 1,
-          baseArrayLayer: 0,
-          layerCount: 1,
-        }),
-      })
-      ASSERT_VK_RESULT(
-        vkCreateImageView(device, createInfo, null, swapChainImageViews[i]),
-        `Unable to create an image view for swapchain image under index ${i}`
-      )
+      swapChainImageViews[i] = createImageView(device, swapChainImages[i], surfaceFormat.format)
     }
   }
 
@@ -979,9 +1166,19 @@ const initVulkan = (
       pImmutableSamplers: null,
     })
 
+    const samplerLayoutBinding = new VkDescriptorSetLayoutBinding({
+      binding: 1,
+      descriptorCount: 1,
+      descriptorType: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+      pImmutableSamplers: null,
+      stageFlags: VK_SHADER_STAGE_FRAGMENT_BIT,
+    })
+
+    const bindings = [uboLayoutBinding, samplerLayoutBinding]
+
     const layoutInfo = new VkDescriptorSetLayoutCreateInfo({
-      bindingCount: 1,
-      pBindings: [uboLayoutBinding],
+      bindingCount: bindings.length,
+      pBindings: bindings,
     })
     descriptorSetLayout = new VkDescriptorSetLayout()
     ASSERT_VK_RESULT(
@@ -1205,6 +1402,90 @@ const initVulkan = (
     )
   }
 
+  const createTextureImage = (): void => {
+    const imageSize = data.uvGridImage.buffer.byteLength
+
+    const [stagingBuffer, stagingBufferMemory] = createBuffer(
+      physicalDevice,
+      device,
+      queueFamilyIndices,
+      imageSize,
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    )
+
+    const dataPtr = { $: 0n }
+    vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, dataPtr)
+    memoryCopy(dataPtr.$, data.uvGridImage.buffer, imageSize)
+    vkUnmapMemory(device, stagingBufferMemory)
+    ;[textureImage, textureImageMemory] = createImage(
+      physicalDevice,
+      device,
+      data.uvGridImage,
+      VK_FORMAT_R8G8B8A8_SRGB,
+      VK_IMAGE_TILING_OPTIMAL,
+      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    )
+
+    transitionImageLayout(
+      device,
+      graphicsQueue,
+      graphicsCommandPool,
+      textureImage,
+      VK_FORMAT_R8G8B8A8_SRGB,
+      VK_IMAGE_LAYOUT_UNDEFINED,
+      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+    )
+    copyBufferToImage(
+      device,
+      graphicsQueue,
+      graphicsCommandPool,
+      stagingBuffer,
+      textureImage,
+      data.uvGridImage.width,
+      data.uvGridImage.height
+    )
+    transitionImageLayout(
+      device,
+      graphicsQueue,
+      graphicsCommandPool,
+      textureImage,
+      VK_FORMAT_R8G8B8A8_SRGB,
+      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    )
+
+    vkDestroyBuffer(device, stagingBuffer, null)
+    vkFreeMemory(device, stagingBufferMemory, null)
+  }
+
+  const createTextureImageView = (): void => {
+    textureImageView = createImageView(device, textureImage, VK_FORMAT_R8G8B8A8_SRGB)
+  }
+
+  const createTextureSampler = (): void => {
+    const samplerInfo = new VkSamplerCreateInfo({
+      magFilter: VK_FILTER_LINEAR,
+      minFilter: VK_FILTER_LINEAR,
+      addressModeU: VK_SAMPLER_ADDRESS_MODE_REPEAT,
+      addressModeV: VK_SAMPLER_ADDRESS_MODE_REPEAT,
+      addressModeW: VK_SAMPLER_ADDRESS_MODE_REPEAT,
+      anisotropyEnable: true,
+      maxAnisotropy: physicalDeviceProperties.limits!.maxSamplerAnisotropy,
+      borderColor: VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+      unnormalizedCoordinates: false,
+      compareEnable: false,
+      compareOp: VK_COMPARE_OP_ALWAYS,
+      mipmapMode: VK_SAMPLER_MIPMAP_MODE_LINEAR,
+      mipLodBias: 0.0,
+      minLod: 0.0,
+      maxLod: 0.0,
+    })
+    textureSampler = new VkSampler()
+    ASSERT_VK_RESULT(vkCreateSampler(device, samplerInfo, null, textureSampler), 'Unable to create texture sampler!')
+  }
+
   const createIndexedVertexBuffer = (): void => {
     ;[vertexBuffer, vertexBufferMemory] = createVertexBuffer(
       physicalDevice,
@@ -1244,13 +1525,16 @@ const initVulkan = (
   }
 
   const createDescriptorPool = () => {
-    const poolSize = new VkDescriptorPoolSize({
-      type: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-      descriptorCount: swapChainImages.length,
-    })
+    const poolSizes = [
+      new VkDescriptorPoolSize({ type: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, descriptorCount: swapChainImages.length }),
+      new VkDescriptorPoolSize({
+        type: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        descriptorCount: swapChainImages.length,
+      }),
+    ]
     const poolCreateInfo = new VkDescriptorPoolCreateInfo({
-      poolSizeCount: 1,
-      pPoolSizes: [poolSize],
+      poolSizeCount: 2,
+      pPoolSizes: poolSizes,
       maxSets: swapChainImages.length,
     })
     descriptorPool = new VkDescriptorPool()
@@ -1383,17 +1667,34 @@ const initVulkan = (
         offset: 0,
         range: uniforms.data.byteLength,
       })
-      const descriptorWrite = new VkWriteDescriptorSet({
-        dstSet: descriptorSets[i],
-        dstBinding: 0,
-        dstArrayElement: 0,
-        descriptorType: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        descriptorCount: 1,
-        pBufferInfo: [bufferInfo],
-        pImageInfo: null,
-        pTexelBufferView: null,
+      const imageInfo = new VkDescriptorImageInfo({
+        imageLayout: VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        imageView: textureImageView,
+        sampler: textureSampler,
       })
-      vkUpdateDescriptorSets(device, 1, [descriptorWrite], 0, null)
+      const descriptorWrites = [
+        new VkWriteDescriptorSet({
+          dstSet: descriptorSets[i],
+          dstBinding: 0,
+          dstArrayElement: 0,
+          descriptorType: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+          descriptorCount: 1,
+          pBufferInfo: [bufferInfo],
+          pImageInfo: null,
+          pTexelBufferView: null,
+        }),
+        new VkWriteDescriptorSet({
+          dstSet: descriptorSets[i],
+          dstBinding: 1,
+          dstArrayElement: 0,
+          descriptorType: VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+          descriptorCount: 1,
+          pBufferInfo: null,
+          pImageInfo: [imageInfo],
+          pTexelBufferView: null,
+        }),
+      ]
+      vkUpdateDescriptorSets(device, descriptorWrites.length, descriptorWrites, 0, null)
     }
   }
 
@@ -1486,6 +1787,9 @@ const initVulkan = (
   createGraphicsPipeline()
   createFramebuffers()
   createCommandPools()
+  createTextureImage()
+  createTextureImageView()
+  createTextureSampler()
   createIndexedVertexBuffer()
   createUniformBuffers()
   createDescriptorPool()
@@ -1497,6 +1801,12 @@ const initVulkan = (
     cleanupSwapChain()
 
     vkDestroyDescriptorSetLayout(device, descriptorSetLayout, null)
+
+    vkDestroySampler(device, textureSampler, null)
+    vkDestroyImageView(device, textureImageView, null)
+
+    vkDestroyImage(device, textureImage, null)
+    vkFreeMemory(device, textureImageMemory, null)
 
     vkDestroyBuffer(device, indexBuffer, null)
     vkFreeMemory(device, indexBufferMemory, null)
@@ -1547,8 +1857,8 @@ const initVulkan = (
   return { loop }
 }
 
-export const run = () => {
-  const { loop } = initVulkan()
+export const run = (data: InputData) => {
+  const { loop } = initVulkan(data)
 
   loop()
 }

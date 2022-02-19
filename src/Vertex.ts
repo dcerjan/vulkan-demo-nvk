@@ -8,21 +8,22 @@ import {
 import { vec2, vec3 } from 'gl-matrix'
 
 export class Vertex {
-  constructor(public position: vec2, public color: vec3) {}
+  constructor(public position: vec2, public color: vec3, public uv: vec2) {}
 
   static sizeOf() {
-    return 2 * 4 + 3 * 4
+    return 2 * 4 + 3 * 4 + 2 * 4
   }
 
   static offsetOf() {
     return {
       position: 0,
       color: 2 * 4,
+      uv: 2 * 4 + 3 * 4,
     }
   }
 
   static buffer(vertices: Vertex[]) {
-    return new Float32Array(vertices.map(({ position, color }) => [...position, ...color]).flatMap((v) => v))
+    return new Float32Array(vertices.map(({ position, color, uv }) => [...position, ...color, ...uv]).flatMap((v) => v))
   }
 
   static getBindingDescription() {
@@ -48,6 +49,12 @@ export class Vertex {
         location: 1,
         format: VK_FORMAT_R32G32B32_SFLOAT,
         offset: Vertex.offsetOf().color,
+      }),
+      new VkVertexInputAttributeDescription({
+        binding: 0,
+        location: 2,
+        format: VK_FORMAT_R32G32_SFLOAT,
+        offset: Vertex.offsetOf().uv,
       }),
     ]
 
