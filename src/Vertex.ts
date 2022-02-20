@@ -8,17 +8,17 @@ import {
 import { vec2, vec3 } from 'gl-matrix'
 
 export class Vertex {
-  constructor(public position: vec2, public color: vec3, public uv: vec2) {}
+  constructor(public position: vec3, public color: vec3, public uv: vec2) {}
 
   static sizeOf() {
-    return 2 * 4 + 3 * 4 + 2 * 4
+    return 3 * 4 + 3 * 4 + 2 * 4
   }
 
   static offsetOf() {
     return {
       position: 0,
-      color: 2 * 4,
-      uv: 2 * 4 + 3 * 4,
+      color: 3 * 4,
+      uv: 3 * 4 + 3 * 4,
     }
   }
 
@@ -41,7 +41,7 @@ export class Vertex {
       new VkVertexInputAttributeDescription({
         binding: 0,
         location: 0,
-        format: VK_FORMAT_R32G32_SFLOAT,
+        format: VK_FORMAT_R32G32B32_SFLOAT,
         offset: Vertex.offsetOf().position,
       }),
       new VkVertexInputAttributeDescription({

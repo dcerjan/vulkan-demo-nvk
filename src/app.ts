@@ -263,6 +263,25 @@ import {
   vkUnmapMemory,
   vkUpdateDescriptorSets,
   vkWaitForFences,
+  VkFormatFeatureFlagBits,
+  VkFormatProperties,
+  vkGetPhysicalDeviceFormatProperties,
+  VK_IMAGE_TILING_LINEAR,
+  VK_FORMAT_D32_SFLOAT,
+  VK_FORMAT_D32_SFLOAT_S8_UINT,
+  VK_FORMAT_D24_UNORM_S8_UINT,
+  VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT,
+  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+  VkImageAspectFlagBits,
+  VK_IMAGE_ASPECT_DEPTH_BIT,
+  VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+  VkClearDepthStencilValue,
+  VkPipelineDepthStencilStateCreateInfo,
+  VK_COMPARE_OP_LESS,
+  VK_IMAGE_ASPECT_STENCIL_BIT,
 } from 'nvk'
 
 import { GLSL } from 'nvk-essentials'
@@ -629,7 +648,8 @@ const createIndexBuffer = (
 const createImage = (
   physicalDevice: VkPhysicalDevice,
   device: VkDevice,
-  image: ImageDescriptor,
+  imageWidth: number,
+  imageHeight: number,
   format: VkFormat,
   tiling: VkImageTiling,
   usage: VkImageUsageFlagBits,
@@ -640,8 +660,8 @@ const createImage = (
 
   const imageInfo = new VkImageCreateInfo()
   imageInfo.imageType = VK_IMAGE_TYPE_2D
-  imageInfo.extent!.width = image.width
-  imageInfo.extent!.height = image.height
+  imageInfo.extent!.width = imageWidth
+  imageInfo.extent!.height = imageHeight
   imageInfo.extent!.depth = 1
   imageInfo.mipLevels = 1
   imageInfo.arrayLayers = 1
@@ -717,11 +737,18 @@ const transitionImageLayout = (
   barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED
   barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED
   barrier.image = image
-  barrier.subresourceRange!.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT
   barrier.subresourceRange!.baseMipLevel = 0
   barrier.subresourceRange!.levelCount = 1
   barrier.subresourceRange!.baseArrayLayer = 0
   barrier.subresourceRange!.layerCount = 1
+
+  if (newLayout === VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+    barrier.subresourceRange!.aspectMask = hasStencilComponent(format)
+      ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+      : VK_IMAGE_ASPECT_DEPTH_BIT
+  } else {
+    barrier.subresourceRange!.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT
+  }
 
   let sourceStage: VkPipelineStageFlagBits
   let destinationStage: VkPipelineStageFlagBits
@@ -741,6 +768,15 @@ const transitionImageLayout = (
 
     sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT
     destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+  } else if (
+    oldLayout === VK_IMAGE_LAYOUT_UNDEFINED &&
+    newLayout === VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+  ) {
+    barrier.srcAccessMask = 0
+    barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+
+    sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+    destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
   } else {
     throw new Error('Invalid oldLayout and newLAyout combination encountered!')
   }
@@ -750,12 +786,17 @@ const transitionImageLayout = (
   endSingleCommand(device, commandQueue, commandPool, commandBuffer)
 }
 
-const createImageView = (device: VkDevice, image: VkImage, format: VkFormat) => {
+const createImageView = (
+  device: VkDevice,
+  image: VkImage,
+  format: VkFormat,
+  aspectMaskFlags: VkImageAspectFlagBits
+) => {
   const viewInfo = new VkImageViewCreateInfo()
   viewInfo.image = image
   viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D
   viewInfo.format = format
-  viewInfo.subresourceRange!.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT
+  viewInfo.subresourceRange!.aspectMask = aspectMaskFlags
   viewInfo.subresourceRange!.baseMipLevel = 0
   viewInfo.subresourceRange!.levelCount = 1
   viewInfo.subresourceRange!.baseArrayLayer = 0
@@ -770,6 +811,40 @@ const createImageView = (device: VkDevice, image: VkImage, format: VkFormat) => 
   ASSERT_VK_RESULT(vkCreateImageView(device, viewInfo, null, imageView), 'Unable to create texture image view!')
 
   return imageView
+}
+
+const findSupportedFormat = (
+  physicalDevice: VkPhysicalDevice,
+  candidates: VkFormat[],
+  tiling: VkImageTiling,
+  features: VkFormatFeatureFlagBits
+) => {
+  for (const format of candidates) {
+    const props = new VkFormatProperties()
+    vkGetPhysicalDeviceFormatProperties(physicalDevice, format, props)
+    if (tiling === VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & features) === features) {
+      return format
+    } else if (tiling === VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & features) === features) {
+      return format
+    }
+  }
+
+  throw new Error('Unable to find supported format!')
+}
+
+const findDepthFormat = (physicalDevice: VkPhysicalDevice, options: { useStencil: boolean }) => {
+  return findSupportedFormat(
+    physicalDevice,
+    options.useStencil
+      ? [VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT]
+      : [VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT],
+    VK_IMAGE_TILING_OPTIMAL,
+    VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+  )
+}
+
+const hasStencilComponent = (format: VkFormat) => {
+  return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT
 }
 
 const initVulkan = (
@@ -823,14 +898,23 @@ const initVulkan = (
   let textureImageMemory: VkDeviceMemory
   let textureImageView: VkImageView
   let textureSampler: VkSampler
+  let depthFormat: VkFormat
+  let depthImage: VkImage
+  let depthImageMemory: VkDeviceMemory
+  let depthImageView: VkImageView
 
   const vertices = [
-    new Vertex([-0.5, -0.5], [1.0, 1.0, 1.0], [1.0, 0.0]),
-    new Vertex([0.5, -0.5], [0.0, 1.0, 0.0], [0.0, 0.0]),
-    new Vertex([0.5, 0.5], [0.0, 0.0, 1.0], [0.0, 1.0]),
-    new Vertex([-0.5, 0.5], [1.0, 0.0, 0.0], [1.0, 1.0]),
+    new Vertex([-0.5, -0.5, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0]),
+    new Vertex([0.5, -0.5, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]),
+    new Vertex([0.5, 0.5, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0]),
+    new Vertex([-0.5, 0.5, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0]),
+
+    new Vertex([-0.5, -0.5, -0.5], [1.0, 1.0, 1.0], [1.0, 0.0]),
+    new Vertex([0.5, -0.5, 0.5], [0.0, 1.0, 0.0], [0.0, 0.0]),
+    new Vertex([0.5, 0.5, -0.5], [0.0, 0.0, 1.0], [0.0, 1.0]),
+    new Vertex([-0.5, 0.5, 0.5], [1.0, 0.0, 0.0], [1.0, 1.0]),
   ]
-  const indices = [0, 1, 2, 2, 3, 0]
+  const indices = [0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4]
 
   const model = Mat4.Identity()
   const view = Mat4.LookAt(new Vec3(5, 5, -10).mutScale(0.25), Vec3.Null(), Vec3.Down())
@@ -951,6 +1035,8 @@ const initVulkan = (
       }
     }
 
+    depthFormat = findDepthFormat(physicalDevice, { useStencil: false })
+
     if (physicalDevice == null) {
       throw new Error('Unable to find a suitable GPU!')
     }
@@ -1068,6 +1154,10 @@ const initVulkan = (
   const cleanupSwapChain = (): void => {
     vkDeviceWaitIdle(device)
 
+    vkDestroyImageView(device, depthImageView, null)
+    vkDestroyImage(device, depthImage, null)
+    vkFreeMemory(device, depthImageMemory, null)
+
     for (const framebuffer of swapChainFramebuffers) {
       vkDestroyFramebuffer(device, framebuffer, null)
     }
@@ -1105,7 +1195,12 @@ const initVulkan = (
     swapChainImageViews = []
 
     for (let i = 0; i < swapChainImages.length; ++i) {
-      swapChainImageViews[i] = createImageView(device, swapChainImages[i], surfaceFormat.format)
+      swapChainImageViews[i] = createImageView(
+        device,
+        swapChainImages[i],
+        surfaceFormat.format,
+        VK_IMAGE_ASPECT_COLOR_BIT
+      )
     }
   }
 
@@ -1126,26 +1221,45 @@ const initVulkan = (
       layout: VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
     })
 
+    const hasStencil = hasStencilComponent(depthFormat)
+    const depthAttachment = new VkAttachmentDescription({
+      format: depthFormat,
+      samples: VK_SAMPLE_COUNT_1_BIT,
+      loadOp: VK_ATTACHMENT_LOAD_OP_CLEAR,
+      storeOp: VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      stencilLoadOp: hasStencil ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      stencilStoreOp: VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      initialLayout: VK_IMAGE_LAYOUT_UNDEFINED,
+      finalLayout: VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    })
+
+    const depthAttachmentRef = new VkAttachmentReference({
+      attachment: 1,
+      layout: VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    })
+
     const subpass = new VkSubpassDescription({
       pipelineBindPoint: VK_PIPELINE_BIND_POINT_GRAPHICS,
       colorAttachmentCount: 1,
       // layout(location = 0) out vec4 outColor maps to the first element of this array
       pColorAttachments: [colorAttachmentRef],
+      pDepthStencilAttachment: depthAttachmentRef,
     })
 
     const dependency = new VkSubpassDependency({
       srcSubpass: VK_SUBPASS_EXTERNAL,
       dstSubpass: 0,
-      srcStageMask: VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      srcStageMask: VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
       srcAccessMask: 0,
-      dstStageMask: VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-      dstAccessMask: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      dstStageMask: VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+      dstAccessMask: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
     })
 
     renderPass = new VkRenderPass()
+    const attachments = [colorAttachment, depthAttachment]
     const renderPassCreateInfo = new VkRenderPassCreateInfo({
-      attachmentCount: 1,
-      pAttachments: [colorAttachment],
+      attachmentCount: attachments.length,
+      pAttachments: attachments,
       subpassCount: 1,
       pSubpasses: [subpass],
       dependencyCount: 1,
@@ -1328,6 +1442,18 @@ const initVulkan = (
       'Unable to create pipeline layout!'
     )
 
+    const depthStencilState = new VkPipelineDepthStencilStateCreateInfo({
+      depthTestEnable: true,
+      depthWriteEnable: true,
+      depthCompareOp: VK_COMPARE_OP_LESS,
+      depthBoundsTestEnable: false,
+      minDepthBounds: 0.0,
+      maxDepthBounds: 1.0,
+      stencilTestEnable: false,
+      // depthStencil.front = {} // Optional
+      // depthStencil.back = {} // Optional
+    })
+
     const pipelineCreateInfo = new VkGraphicsPipelineCreateInfo({
       stageCount: 2,
       pStages: shaderStages,
@@ -1337,7 +1463,7 @@ const initVulkan = (
       pViewportState: viewportState,
       pRasterizationState: rasterizer,
       pMultisampleState: multisampling,
-      pDepthStencilState: null,
+      pDepthStencilState: depthStencilState,
       pColorBlendState: colorBlending,
       pDynamicState: null,
 
@@ -1364,10 +1490,11 @@ const initVulkan = (
     swapChainFramebuffers = new Array(swapChainImageViews.length).fill(0).map(() => new VkFramebuffer())
 
     for (let i = 0; i < swapChainImageViews.length; ++i) {
+      const attachments = [swapChainImageViews[i], depthImageView]
       const framebufferInfo = new VkFramebufferCreateInfo({
         renderPass: renderPass,
-        attachmentCount: 1,
-        pAttachments: [swapChainImageViews[i]],
+        attachmentCount: attachments.length,
+        pAttachments: attachments,
         width: swapChainImageExtent.width,
         height: swapChainImageExtent.height,
         layers: 1,
@@ -1402,6 +1529,31 @@ const initVulkan = (
     )
   }
 
+  const createDepthResources = (): void => {
+    ;[depthImage, depthImageMemory] = createImage(
+      physicalDevice,
+      device,
+      swapChainImageExtent.width,
+      swapChainImageExtent.height,
+      depthFormat,
+      VK_IMAGE_TILING_OPTIMAL,
+      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    )
+
+    depthImageView = createImageView(device, depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT)
+
+    transitionImageLayout(
+      device,
+      graphicsQueue,
+      graphicsCommandPool,
+      depthImage,
+      depthFormat,
+      VK_IMAGE_LAYOUT_UNDEFINED,
+      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    )
+  }
+
   const createTextureImage = (): void => {
     const imageSize = data.uvGridImage.buffer.byteLength
 
@@ -1421,7 +1573,8 @@ const initVulkan = (
     ;[textureImage, textureImageMemory] = createImage(
       physicalDevice,
       device,
-      data.uvGridImage,
+      data.uvGridImage.width,
+      data.uvGridImage.height,
       VK_FORMAT_R8G8B8A8_SRGB,
       VK_IMAGE_TILING_OPTIMAL,
       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -1461,7 +1614,7 @@ const initVulkan = (
   }
 
   const createTextureImageView = (): void => {
-    textureImageView = createImageView(device, textureImage, VK_FORMAT_R8G8B8A8_SRGB)
+    textureImageView = createImageView(device, textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT)
   }
 
   const createTextureSampler = (): void => {
@@ -1524,7 +1677,7 @@ const initVulkan = (
     }
   }
 
-  const createDescriptorPool = () => {
+  const createDescriptorPool = (): void => {
     const poolSizes = [
       new VkDescriptorPoolSize({ type: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, descriptorCount: swapChainImages.length }),
       new VkDescriptorPoolSize({
@@ -1567,19 +1720,21 @@ const initVulkan = (
         `Unable to begin recording a command buffer under index ${i}`
       )
 
-      const clearColor = new VkClearValue({
-        color: new VkClearColorValue({ float32: [0.0, 0.0, 0.0, 0.0] }),
-      })
-      const renderPassInfo = new VkRenderPassBeginInfo({
-        renderPass,
-        framebuffer: swapChainFramebuffers[i],
-        renderArea: new VkRect2D({
-          offset: new VkOffset2D({ x: 0, y: 0 }),
-          extent: swapChainImageExtent,
-        }),
-        clearValueCount: 1,
-        pClearValues: [clearColor],
-      })
+      const clearColor = new VkClearValue()
+      clearColor.color!.float32 = [0.0, 0.0, 0.0, 0.0]
+      const clearDepthStencil = new VkClearValue()
+      clearDepthStencil.depthStencil!.depth = 1.0
+      clearDepthStencil.depthStencil!.stencil = 0
+      const clearValues = [clearColor, clearDepthStencil]
+      const renderPassInfo = new VkRenderPassBeginInfo()
+      renderPassInfo.renderPass = renderPass
+      renderPassInfo.framebuffer = swapChainFramebuffers[i]
+      renderPassInfo.renderArea!.offset!.x = 0
+      renderPassInfo.renderArea!.offset!.y = 0
+      renderPassInfo.renderArea!.extent!.width = swapChainImageExtent.width
+      renderPassInfo.renderArea!.extent!.height = swapChainImageExtent.height
+      renderPassInfo.clearValueCount = clearValues.length
+      renderPassInfo.pClearValues = clearValues
 
       vkCmdBeginRenderPass(graphicsCommandBuffers[i], renderPassInfo, VK_SUBPASS_CONTENTS_INLINE)
 
@@ -1645,6 +1800,7 @@ const initVulkan = (
     createImageViews()
     createRenderPass()
     createGraphicsPipeline()
+    createDepthResources()
     createFramebuffers()
     createUniformBuffers()
     createDescriptorPool()
@@ -1652,7 +1808,7 @@ const initVulkan = (
     createCommandBuffers()
   }
 
-  const createDescriptorSets = () => {
+  const createDescriptorSets = (): void => {
     const layouts = new Array(swapChainImages.length).fill(0).map(() => descriptorSetLayout)
     const allocInfo = new VkDescriptorSetAllocateInfo({
       descriptorPool: descriptorPool,
@@ -1698,7 +1854,7 @@ const initVulkan = (
     }
   }
 
-  const updateUniformBuffer = (currentImage: number) => {
+  const updateUniformBuffer = (currentImage: number): void => {
     const angle = performance.now() * 0.001 * 20
 
     uniforms.model = Mat4.Rotation(new Vec3(0, 0, 1), angle)
@@ -1785,8 +1941,9 @@ const initVulkan = (
   createRenderPass()
   createDescriptorSetLayout()
   createGraphicsPipeline()
-  createFramebuffers()
   createCommandPools()
+  createDepthResources()
+  createFramebuffers()
   createTextureImage()
   createTextureImageView()
   createTextureSampler()
